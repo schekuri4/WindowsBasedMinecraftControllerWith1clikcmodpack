@@ -95,10 +95,46 @@ async def create_server(data: ServerCreate, db: Session = Depends(get_db)):
             jar = await ServerManager.download_forge_installer(data.minecraft_version, server.path)
             server.server_jar = jar
             db.commit()
+        elif data.server_type == "neoforge":
+            jar = await ServerManager.download_neoforge_installer(data.minecraft_version, server.path)
+            server.server_jar = jar
+            db.commit()
         elif data.server_type == "fabric":
             jar = await ServerManager.download_fabric_server(data.minecraft_version, server.path)
             server.server_jar = jar
             db.commit()
+        elif data.server_type == "quilt":
+            jar = await ServerManager.download_quilt_server(data.minecraft_version, server.path)
+            server.server_jar = jar
+            db.commit()
+        elif data.server_type == "paper":
+            await ServerManager.download_paper_jar(data.minecraft_version, server.path)
+        elif data.server_type == "purpur":
+            await ServerManager.download_purpur_jar(data.minecraft_version, server.path)
+        elif data.server_type == "pufferfish":
+            await ServerManager.download_pufferfish_jar(data.minecraft_version, server.path)
+        elif data.server_type == "spigot":
+            await ServerManager.download_spigot_buildtools(data.minecraft_version, server.path)
+        elif data.server_type == "bukkit":
+            await ServerManager.download_bukkit_buildtools(data.minecraft_version, server.path)
+        elif data.server_type == "glowstone":
+            await ServerManager.download_glowstone_jar(data.minecraft_version, server.path)
+        elif data.server_type == "sponge":
+            await ServerManager.download_sponge_jar(data.minecraft_version, server.path)
+        elif data.server_type == "mohist":
+            await ServerManager.download_mohist_jar(data.minecraft_version, server.path)
+        elif data.server_type == "arclight":
+            await ServerManager.download_arclight_jar(data.minecraft_version, server.path)
+        elif data.server_type == "magma":
+            await ServerManager.download_magma_jar(data.minecraft_version, server.path)
+        elif data.server_type == "banner":
+            await ServerManager.download_banner_jar(data.minecraft_version, server.path)
+        elif data.server_type == "cardboard":
+            await ServerManager.download_cardboard_jar(data.minecraft_version, server.path)
+        elif data.server_type == "liteloader":
+            await ServerManager.download_liteloader_jar(data.minecraft_version, server.path)
+        elif data.server_type == "rift":
+            await ServerManager.download_rift_jar(data.minecraft_version, server.path)
     except Exception as e:
         return {"server_id": server.id, "warning": f"Server created but jar download failed: {e}"}
 

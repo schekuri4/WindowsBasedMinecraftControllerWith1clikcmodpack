@@ -128,12 +128,26 @@ class ServerManager:
         mc_version = ""
         loader_version = ""
 
-        # Priority patterns for detection
+        # Priority patterns for detection (order matters - more specific first)
         jar_patterns = {
+            "neoforge": re.compile(r"neoforge.*?\.jar", re.I),
+            "arclight": re.compile(r"arclight.*?\.jar", re.I),
+            "mohist": re.compile(r"mohist.*?\.jar", re.I),
+            "magma": re.compile(r"magma.*?\.jar", re.I),
+            "banner": re.compile(r"banner.*?\.jar", re.I),
+            "cardboard": re.compile(r"cardboard.*?\.jar", re.I),
             "forge": re.compile(r"forge.*?(\d+\.\d+\.\d+).*?-(\d+[\.\d]*).*?\.jar", re.I),
-            "fabric": re.compile(r"fabric-server.*?\.jar", re.I),
+            "purpur": re.compile(r"purpur.*?\.jar", re.I),
+            "pufferfish": re.compile(r"pufferfish.*?\.jar", re.I),
             "paper": re.compile(r"paper.*?\.jar", re.I),
             "spigot": re.compile(r"spigot.*?\.jar", re.I),
+            "craftbukkit": re.compile(r"craftbukkit.*?\.jar", re.I),
+            "sponge": re.compile(r"sponge(vanilla|forge)?.*?\.jar", re.I),
+            "glowstone": re.compile(r"glowstone.*?\.jar", re.I),
+            "fabric": re.compile(r"fabric-server.*?\.jar", re.I),
+            "quilt": re.compile(r"quilt-server.*?\.jar", re.I),
+            "liteloader": re.compile(r"liteloader.*?\.jar", re.I),
+            "rift": re.compile(r"rift.*?\.jar", re.I),
             "vanilla": re.compile(r"(server|minecraft_server).*?\.jar", re.I),
         }
 
@@ -166,10 +180,12 @@ class ServerManager:
             except Exception:
                 pass
 
-        # Check for fabric indicators
+        # Check for fabric/quilt indicators
         if not server_type or server_type == "vanilla":
             if (server_path / ".fabric").exists() or (server_path / "fabric-server-launcher.properties").exists():
                 server_type = "fabric"
+            elif (server_path / ".quilt").exists():
+                server_type = "quilt"
 
         return jar_name, server_type, mc_version, loader_version
 
@@ -532,6 +548,488 @@ class ServerManager:
             jar_path.write_bytes(resp.content)
 
         return "fabric-server-launch.jar"
+
+    @staticmethod
+    async def download_neoforge_installer(mc_version: str, dest_dir: str) -> str:
+        """Download NeoForge installer and run it."""
+        dest_path = Path(dest_dir)
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            # List available NeoForge versions from Maven
+            resp = await client.get(
+                "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge"
+            )
+            resp.raise_for_status()
+            all_versions = resp.json().get("versions", [])
+
+            # NeoForge versions are like "20.4.237" for MC 1.20.4, "21.1.1" for MC 1.21.1
+            # MC 1.20.x -> NeoForge 20.x, MC 1.21.x -> NeoForge 21.x
+            parts = mc_version.split(".")
+            if len(parts) >= 2:
+                major_minor = f"{parts[1]}"  # e.g. "20" from "1.20.4"
+                if len(parts) >= 3:
+                    patch = parts[2]
+                    prefix = f"{major_minor}.{patch}."
+                else:
+                    prefix = f"{major_minor}."
+            else:
+                prefix = ""
+
+            matching = [v for v in all_versions if v.startswith(prefix)]
+            if not matching:
+                # Fallback: try just major
+                matching = [v for v in all_versions if v.startswith(f"{parts[1]}.")]
+            if not matching:
+                raise ValueError(f"No NeoForge version found for MC {mc_version}")
+
+            nf_version = matching[-1]  # Latest matching version
+            installer_url = (
+                f"https://maven.neoforged.net/releases/net/neoforged/neoforge/"
+                f"{nf_version}/neoforge-{nf_version}-installer.jar"
+            )
+
+            installer_path = dest_path / f"neoforge-{nf_version}-installer.jar"
+            resp = await client.get(installer_url)
+            resp.raise_for_status()
+            installer_path.write_bytes(resp.content)
+
+        java_path = JavaManager.get_best_java_path(mc_version)
+        subprocess.run(
+            [java_path, "-jar", str(installer_path), "--installServer"],
+            cwd=str(dest_path),
+            timeout=300,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        installer_path.unlink(missing_ok=True)
+
+        # Find resulting jar or run script
+        for f in dest_path.iterdir():
+            if "neoforge" in f.name.lower() and f.suffix == ".jar" and "installer" not in f.name.lower():
+                return f.name
+
+        run_bat = dest_path / "run.bat"
+        if run_bat.exists():
+            return "run.bat"
+
+        return "server.jar"
+
+    @staticmethod
+    async def download_quilt_server(mc_version: str, dest_dir: str) -> str:
+        """Download Quilt server launcher jar."""
+        dest_path = Path(dest_dir)
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            loader_resp = await client.get("https://meta.quiltmc.org/v3/versions/loader")
+            loader_resp.raise_for_status()
+            loader_version = loader_resp.json()[0]["version"]
+
+            installer_resp = await client.get("https://meta.quiltmc.org/v3/versions/installer")
+            installer_resp.raise_for_status()
+            installer_version = installer_resp.json()[0]["version"]
+
+            jar_url = (
+                f"https://meta.quiltmc.org/v3/versions/loader/"
+                f"{mc_version}/{loader_version}/{installer_version}/server/jar"
+            )
+
+            jar_path = dest_path / "quilt-server-launch.jar"
+            resp = await client.get(jar_url)
+            resp.raise_for_status()
+            jar_path.write_bytes(resp.content)
+
+        return "quilt-server-launch.jar"
+
+    @staticmethod
+    async def download_paper_jar(mc_version: str, dest_dir: str) -> str:
+        """Download Paper server jar via PaperMC API."""
+        return await ServerManager._download_papermc_project("paper", mc_version, dest_dir)
+
+    @staticmethod
+    async def download_purpur_jar(mc_version: str, dest_dir: str) -> str:
+        """Download Purpur server jar."""
+        dest_path = Path(dest_dir)
+        jar_path = dest_path / "server.jar"
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            resp = await client.get(
+                f"https://api.purpurmc.org/v2/purpur/{mc_version}/latest/download"
+            )
+            resp.raise_for_status()
+            jar_path.write_bytes(resp.content)
+        return "server.jar"
+
+    @staticmethod
+    async def download_pufferfish_jar(mc_version: str, dest_dir: str) -> str:
+        """Download Pufferfish server jar from GitHub releases."""
+        dest_path = Path(dest_dir)
+        jar_path = dest_path / "server.jar"
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            resp = await client.get(
+                "https://api.github.com/repos/pufferfish-gg/Pufferfish/releases",
+                headers={"Accept": "application/vnd.github.v3+json"},
+            )
+            resp.raise_for_status()
+            releases = resp.json()
+
+            for release in releases:
+                tag = release.get("tag_name", "")
+                if mc_version in tag:
+                    for asset in release.get("assets", []):
+                        if asset["name"].endswith(".jar") and "pufferfish" in asset["name"].lower():
+                            dl_resp = await client.get(asset["browser_download_url"])
+                            dl_resp.raise_for_status()
+                            jar_path.write_bytes(dl_resp.content)
+                            return "server.jar"
+
+            # Fallback: latest release
+            if releases and releases[0].get("assets"):
+                for asset in releases[0]["assets"]:
+                    if asset["name"].endswith(".jar"):
+                        dl_resp = await client.get(asset["browser_download_url"])
+                        dl_resp.raise_for_status()
+                        jar_path.write_bytes(dl_resp.content)
+                        return "server.jar"
+
+            raise ValueError(f"No Pufferfish jar found for MC {mc_version}")
+
+    @staticmethod
+    async def download_spigot_buildtools(mc_version: str, dest_dir: str) -> str:
+        """Download and run SpigotMC BuildTools to build Spigot server jar."""
+        dest_path = Path(dest_dir)
+        bt_dir = settings.TEMP_DIR / "buildtools"
+        bt_dir.mkdir(parents=True, exist_ok=True)
+
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            resp = await client.get(
+                "https://hub.spigotmc.org/jenkins/job/BuildTools/lastSuccessfulBuild/artifact/target/BuildTools.jar"
+            )
+            resp.raise_for_status()
+            bt_jar = bt_dir / "BuildTools.jar"
+            bt_jar.write_bytes(resp.content)
+
+        java_path = JavaManager.get_best_java_path(mc_version)
+        subprocess.run(
+            [java_path, "-jar", "BuildTools.jar", "--rev", mc_version],
+            cwd=str(bt_dir),
+            timeout=600,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+
+        # Find built jar
+        built_jar = bt_dir / f"spigot-{mc_version}.jar"
+        target_jar = dest_path / "server.jar"
+        if built_jar.exists():
+            shutil.copy2(str(built_jar), str(target_jar))
+        else:
+            # Try any spigot jar
+            for f in bt_dir.iterdir():
+                if f.name.startswith("spigot") and f.suffix == ".jar":
+                    shutil.copy2(str(f), str(target_jar))
+                    break
+
+        return "server.jar"
+
+    @staticmethod
+    async def download_bukkit_buildtools(mc_version: str, dest_dir: str) -> str:
+        """Download and run BuildTools to build CraftBukkit server jar."""
+        dest_path = Path(dest_dir)
+        bt_dir = settings.TEMP_DIR / "buildtools"
+        bt_dir.mkdir(parents=True, exist_ok=True)
+
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            resp = await client.get(
+                "https://hub.spigotmc.org/jenkins/job/BuildTools/lastSuccessfulBuild/artifact/target/BuildTools.jar"
+            )
+            resp.raise_for_status()
+            bt_jar = bt_dir / "BuildTools.jar"
+            bt_jar.write_bytes(resp.content)
+
+        java_path = JavaManager.get_best_java_path(mc_version)
+        subprocess.run(
+            [java_path, "-jar", "BuildTools.jar", "--rev", mc_version, "--compile", "craftbukkit"],
+            cwd=str(bt_dir),
+            timeout=600,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+
+        built_jar = bt_dir / f"craftbukkit-{mc_version}.jar"
+        target_jar = dest_path / "server.jar"
+        if built_jar.exists():
+            shutil.copy2(str(built_jar), str(target_jar))
+        else:
+            for f in bt_dir.iterdir():
+                if f.name.startswith("craftbukkit") and f.suffix == ".jar":
+                    shutil.copy2(str(f), str(target_jar))
+                    break
+
+        return "server.jar"
+
+    @staticmethod
+    async def download_glowstone_jar(mc_version: str, dest_dir: str) -> str:
+        """Download Glowstone server jar from GitHub releases."""
+        dest_path = Path(dest_dir)
+        jar_path = dest_path / "server.jar"
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            resp = await client.get(
+                "https://api.github.com/repos/GlowstoneMC/Glowstone/releases",
+                headers={"Accept": "application/vnd.github.v3+json"},
+            )
+            resp.raise_for_status()
+            releases = resp.json()
+            for release in releases:
+                for asset in release.get("assets", []):
+                    if asset["name"].endswith(".jar"):
+                        dl_resp = await client.get(asset["browser_download_url"])
+                        dl_resp.raise_for_status()
+                        jar_path.write_bytes(dl_resp.content)
+                        return "server.jar"
+            raise ValueError("No Glowstone jar found")
+
+    @staticmethod
+    async def download_sponge_jar(mc_version: str, dest_dir: str) -> str:
+        """Download SpongeVanilla server jar."""
+        dest_path = Path(dest_dir)
+        jar_path = dest_path / "server.jar"
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            # Use Sponge downloads API
+            resp = await client.get(
+                f"https://dl-api-new.spongepowered.org/api/v2/groups/org.spongepowered/artifacts/spongevanilla/versions?tags=minecraft:{mc_version}&limit=1"
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                artifacts = data.get("artifacts", {})
+                for ver_key, ver_data in artifacts.items():
+                    assets = ver_data.get("assets", [])
+                    for asset in assets:
+                        if asset.get("classifier") == "universal" or asset.get("extension") == "jar":
+                            dl_url = asset.get("downloadUrl") or asset.get("url")
+                            if dl_url:
+                                dl_resp = await client.get(dl_url)
+                                dl_resp.raise_for_status()
+                                jar_path.write_bytes(dl_resp.content)
+                                return "server.jar"
+            # Fallback: try GitHub releases
+            resp = await client.get(
+                "https://api.github.com/repos/SpongePowered/SpongeVanilla/releases",
+                headers={"Accept": "application/vnd.github.v3+json"},
+            )
+            resp.raise_for_status()
+            for release in resp.json():
+                for asset in release.get("assets", []):
+                    if asset["name"].endswith(".jar"):
+                        dl_resp = await client.get(asset["browser_download_url"])
+                        dl_resp.raise_for_status()
+                        jar_path.write_bytes(dl_resp.content)
+                        return "server.jar"
+            raise ValueError(f"No SpongeVanilla jar found for MC {mc_version}")
+
+    # -------------------------------------------------------------------
+    # Hybrid server downloads (Mods + Plugins)
+    # -------------------------------------------------------------------
+    @staticmethod
+    async def download_mohist_jar(mc_version: str, dest_dir: str) -> str:
+        """Download Mohist server jar via Mohistmc API."""
+        dest_path = Path(dest_dir)
+        jar_path = dest_path / "server.jar"
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            resp = await client.get(
+                f"https://mohistmc.com/api/v2/projects/mohist/{mc_version}/builds/latest"
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            dl_url = data.get("url")
+            if not dl_url:
+                raise ValueError(f"No Mohist build found for MC {mc_version}")
+            dl_resp = await client.get(dl_url)
+            dl_resp.raise_for_status()
+            jar_path.write_bytes(dl_resp.content)
+        return "server.jar"
+
+    @staticmethod
+    async def download_arclight_jar(mc_version: str, dest_dir: str) -> str:
+        """Download Arclight server jar from GitHub releases."""
+        dest_path = Path(dest_dir)
+        jar_path = dest_path / "server.jar"
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            resp = await client.get(
+                "https://api.github.com/repos/IzzelAliz/Arclight/releases",
+                headers={"Accept": "application/vnd.github.v3+json"},
+            )
+            resp.raise_for_status()
+            releases = resp.json()
+            for release in releases:
+                tag = release.get("tag_name", "")
+                body = release.get("body", "")
+                if mc_version in tag or mc_version in body:
+                    for asset in release.get("assets", []):
+                        name = asset["name"].lower()
+                        if name.endswith(".jar") and "arclight" in name:
+                            dl_resp = await client.get(asset["browser_download_url"])
+                            dl_resp.raise_for_status()
+                            jar_path.write_bytes(dl_resp.content)
+                            return "server.jar"
+            # Fallback: latest release
+            if releases:
+                for asset in releases[0].get("assets", []):
+                    name = asset["name"].lower()
+                    if name.endswith(".jar") and "arclight" in name:
+                        dl_resp = await client.get(asset["browser_download_url"])
+                        dl_resp.raise_for_status()
+                        jar_path.write_bytes(dl_resp.content)
+                        return "server.jar"
+            raise ValueError(f"No Arclight jar found for MC {mc_version}")
+
+    @staticmethod
+    async def download_magma_jar(mc_version: str, dest_dir: str) -> str:
+        """Download Magma server jar."""
+        dest_path = Path(dest_dir)
+        jar_path = dest_path / "server.jar"
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            # Try Magma API
+            resp = await client.get(
+                f"https://api.magmafoundation.org/api/v2/{mc_version}/latest"
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                dl_url = data.get("url") or data.get("link")
+                if dl_url:
+                    dl_resp = await client.get(dl_url)
+                    dl_resp.raise_for_status()
+                    jar_path.write_bytes(dl_resp.content)
+                    return "server.jar"
+            # Fallback: GitHub
+            resp = await client.get(
+                "https://api.github.com/repos/magmafoundation/Magma/releases",
+                headers={"Accept": "application/vnd.github.v3+json"},
+            )
+            resp.raise_for_status()
+            for release in resp.json():
+                tag = release.get("tag_name", "")
+                if mc_version in tag:
+                    for asset in release.get("assets", []):
+                        if asset["name"].endswith(".jar"):
+                            dl_resp = await client.get(asset["browser_download_url"])
+                            dl_resp.raise_for_status()
+                            jar_path.write_bytes(dl_resp.content)
+                            return "server.jar"
+            raise ValueError(f"No Magma jar found for MC {mc_version}")
+
+    @staticmethod
+    async def download_banner_jar(mc_version: str, dest_dir: str) -> str:
+        """Download Banner server jar via Mohistmc API."""
+        dest_path = Path(dest_dir)
+        jar_path = dest_path / "server.jar"
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            resp = await client.get(
+                f"https://mohistmc.com/api/v2/projects/banner/{mc_version}/builds/latest"
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            dl_url = data.get("url")
+            if not dl_url:
+                raise ValueError(f"No Banner build found for MC {mc_version}")
+            dl_resp = await client.get(dl_url)
+            dl_resp.raise_for_status()
+            jar_path.write_bytes(dl_resp.content)
+        return "server.jar"
+
+    @staticmethod
+    async def download_cardboard_jar(mc_version: str, dest_dir: str) -> str:
+        """Download Cardboard (Bukkit on Fabric) jar from GitHub."""
+        dest_path = Path(dest_dir)
+        jar_path = dest_path / "server.jar"
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            resp = await client.get(
+                "https://api.github.com/repos/CardboardPowered/cardboard/releases",
+                headers={"Accept": "application/vnd.github.v3+json"},
+            )
+            resp.raise_for_status()
+            releases = resp.json()
+            for release in releases:
+                tag = release.get("tag_name", "")
+                if mc_version in tag:
+                    for asset in release.get("assets", []):
+                        if asset["name"].endswith(".jar"):
+                            dl_resp = await client.get(asset["browser_download_url"])
+                            dl_resp.raise_for_status()
+                            jar_path.write_bytes(dl_resp.content)
+                            return "server.jar"
+            if releases:
+                for asset in releases[0].get("assets", []):
+                    if asset["name"].endswith(".jar"):
+                        dl_resp = await client.get(asset["browser_download_url"])
+                        dl_resp.raise_for_status()
+                        jar_path.write_bytes(dl_resp.content)
+                        return "server.jar"
+            raise ValueError(f"No Cardboard jar found for MC {mc_version}")
+
+    # -------------------------------------------------------------------
+    # Legacy mod loaders
+    # -------------------------------------------------------------------
+    @staticmethod
+    async def download_liteloader_jar(mc_version: str, dest_dir: str) -> str:
+        """Download LiteLoader server jar (legacy, limited version support)."""
+        dest_path = Path(dest_dir)
+        jar_path = dest_path / "server.jar"
+        # LiteLoader is legacy; provide direct download attempt
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            # Try known snapshot repo
+            url = f"http://dl.liteloader.com/versions/com/mumfrey/liteloader/{mc_version}/liteloader-{mc_version}.jar"
+            resp = await client.get(url)
+            if resp.status_code == 200:
+                jar_path.write_bytes(resp.content)
+                return "server.jar"
+            raise ValueError(
+                f"LiteLoader is a legacy mod loader with limited version support. "
+                f"No jar found for MC {mc_version}. Consider using Fabric or Forge instead."
+            )
+
+    @staticmethod
+    async def download_rift_jar(mc_version: str, dest_dir: str) -> str:
+        """Download Rift mod loader (legacy, for 1.13.x only)."""
+        dest_path = Path(dest_dir)
+        jar_path = dest_path / "server.jar"
+        if not mc_version.startswith("1.13"):
+            raise ValueError("Rift only supports Minecraft 1.13.x. Consider NeoForge or Fabric for newer versions.")
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            resp = await client.get(
+                "https://api.github.com/repos/DimensionalDevelopment/Rift/releases",
+                headers={"Accept": "application/vnd.github.v3+json"},
+            )
+            resp.raise_for_status()
+            for release in resp.json():
+                for asset in release.get("assets", []):
+                    if asset["name"].endswith(".jar"):
+                        dl_resp = await client.get(asset["browser_download_url"])
+                        dl_resp.raise_for_status()
+                        jar_path.write_bytes(dl_resp.content)
+                        return "server.jar"
+            raise ValueError("No Rift jar found. Rift is a legacy loader for MC 1.13 only.")
+
+    # -------------------------------------------------------------------
+    # Helper: PaperMC API (shared by Paper and Folia)
+    # -------------------------------------------------------------------
+    @staticmethod
+    async def _download_papermc_project(project: str, mc_version: str, dest_dir: str) -> str:
+        """Download a jar from PaperMC API (paper, folia, velocity, waterfall)."""
+        dest_path = Path(dest_dir)
+        jar_path = dest_path / "server.jar"
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            resp = await client.get(
+                f"https://api.papermc.io/v2/projects/{project}/versions/{mc_version}/builds"
+            )
+            resp.raise_for_status()
+            builds = resp.json()["builds"]
+            if not builds:
+                raise ValueError(f"No {project} builds found for MC {mc_version}")
+            latest = builds[-1]
+            build_num = latest["build"]
+            download_name = latest["downloads"]["application"]["name"]
+            dl_url = (
+                f"https://api.papermc.io/v2/projects/{project}/versions/"
+                f"{mc_version}/builds/{build_num}/downloads/{download_name}"
+            )
+            dl_resp = await client.get(dl_url)
+            dl_resp.raise_for_status()
+            jar_path.write_bytes(dl_resp.content)
+        return "server.jar"
 
     @staticmethod
     async def get_available_versions() -> list[dict]:

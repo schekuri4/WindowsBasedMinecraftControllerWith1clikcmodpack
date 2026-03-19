@@ -110,9 +110,33 @@ function renderBlankServerForm() {
             <div class="form-group">
                 <label class="form-label">Server Type</label>
                 <select class="form-select" id="cs-type">
-                    <option value="vanilla">Vanilla</option>
-                    <option value="fabric">Fabric</option>
-                    <option value="forge">Forge</option>
+                    <optgroup label="Vanilla">
+                        <option value="vanilla">Vanilla</option>
+                    </optgroup>
+                    <optgroup label="Mod Loaders">
+                        <option value="forge">Forge</option>
+                        <option value="neoforge">NeoForge</option>
+                        <option value="fabric">Fabric</option>
+                        <option value="quilt">Quilt</option>
+                        <option value="liteloader">LiteLoader (Legacy)</option>
+                        <option value="rift">Rift (Legacy, 1.13 only)</option>
+                    </optgroup>
+                    <optgroup label="Server Software (Plugins/Performance)">
+                        <option value="paper">Paper (Recommended)</option>
+                        <option value="spigot">Spigot</option>
+                        <option value="purpur">Purpur</option>
+                        <option value="pufferfish">Pufferfish</option>
+                        <option value="bukkit">Bukkit / CraftBukkit</option>
+                        <option value="glowstone">Glowstone</option>
+                        <option value="sponge">Sponge (SpongeVanilla)</option>
+                    </optgroup>
+                    <optgroup label="Hybrid (Mods + Plugins)">
+                        <option value="arclight">Arclight</option>
+                        <option value="mohist">Mohist</option>
+                        <option value="magma">Magma</option>
+                        <option value="banner">Banner</option>
+                        <option value="cardboard">Cardboard</option>
+                    </optgroup>
                 </select>
             </div>
             <div class="form-group">

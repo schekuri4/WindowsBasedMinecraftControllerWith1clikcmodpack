@@ -14,7 +14,7 @@ class Server(Base):
     name = Column(String(100), nullable=False)
     path = Column(String(500), nullable=False, unique=True)
     server_jar = Column(String(200), nullable=False)
-    server_type = Column(String(50), default="vanilla")  # vanilla, forge, fabric, paper, spigot
+    server_type = Column(String(50), default="vanilla")  # vanilla, forge, neoforge, fabric, quilt, paper, spigot, purpur, pufferfish, bukkit, glowstone, sponge, mohist, arclight, magma, banner, cardboard, liteloader, rift
     minecraft_version = Column(String(20), default="")
     loader_version = Column(String(50), default="")
     min_ram = Column(String(10), default="1G")
