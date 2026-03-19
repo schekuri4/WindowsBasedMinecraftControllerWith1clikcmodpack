@@ -40,6 +40,11 @@ async function renderSettings() {
         </div>
 
         <div class="card" style="margin-bottom:20px">
+            <h3 style="margin-bottom:16px;">Network Access</h3>
+            <div id="settings-network">${loading('Loading network info...')}</div>
+        </div>
+
+        <div class="card" style="margin-bottom:20px">
             <h3 style="margin-bottom:16px;">Export / Import Setup</h3>
             <p style="color:var(--text-secondary);font-size:14px;margin-bottom:12px;">
                 Export your server's modpack and mod configuration to share or back it up.
@@ -106,6 +111,41 @@ async function renderSettings() {
         `;
     } catch (e) {
         document.getElementById('settings-stats').innerHTML = '<p style="color:var(--text-muted)">Could not load stats</p>';
+    }
+
+    try {
+        const network = await API.system.network();
+        const primaryLocal = network.local_ips?.[0] || '';
+        const panelUrl = network.public_ip
+            ? `http://${network.public_ip}:${network.panel_port}`
+            : (primaryLocal ? `http://${primaryLocal}:${network.panel_port}` : 'Unavailable');
+
+        document.getElementById('settings-network').innerHTML = `
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label">Public IP</label>
+                    <input class="form-input" value="${escapeHtml(network.public_ip || 'Unavailable') }" readonly>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Panel URL</label>
+                    <input class="form-input" value="${escapeHtml(panelUrl)}" readonly>
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Local IPs</label>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    ${(network.local_ips || []).length === 0
+                        ? '<span style="color:var(--text-muted);font-size:13px;">No non-loopback local IPs detected.</span>'
+                        : network.local_ips.map(ip => `<span class="tag">${escapeHtml(ip)}</span>`).join('')}
+                </div>
+            </div>
+            <p style="color:var(--text-secondary);font-size:13px;margin-top:12px;">
+                For public access, the panel needs TCP ${network.panel_port} allowed in both Windows Firewall and your cloud or router firewall.
+                Minecraft Java servers need their configured TCP port open for player joins.
+            </p>
+        `;
+    } catch (e) {
+        document.getElementById('settings-network').innerHTML = '<p style="color:var(--text-muted)">Could not load network info</p>';
     }
 
     // Populate export server dropdown

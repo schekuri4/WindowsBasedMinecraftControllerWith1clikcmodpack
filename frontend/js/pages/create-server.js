@@ -1,8 +1,17 @@
 /**
  * Create Server Page
  */
+let createServerState = {
+    network: null,
+};
+
 async function renderCreateServer() {
     const main = document.getElementById('main-content');
+    try {
+        createServerState.network = await API.system.network();
+    } catch (e) {
+        createServerState.network = null;
+    }
     main.innerHTML = `
         <div class="page-header">
             <div>
@@ -23,6 +32,8 @@ async function renderCreateServer() {
             </div>
         </div>
     `;
+
+    updateCreateConnectionPreview('blank');
 }
 
 function switchCreateTab(tab) {
@@ -33,9 +44,54 @@ function switchCreateTab(tab) {
     const content = document.getElementById('create-tab-content');
     if (tab === 'blank') {
         content.innerHTML = renderBlankServerForm();
+        updateCreateConnectionPreview('blank');
     } else {
         content.innerHTML = renderModpackServerForm();
+        updateCreateConnectionPreview('modpack');
     }
+}
+
+function getCreateNetworkTarget() {
+    return createServerState.network?.public_ip || createServerState.network?.local_ips?.[0] || '<server-ip>';
+}
+
+function formatMinecraftAddress(host, port) {
+    if (!host) return 'Unavailable';
+    return Number(port) === 25565 ? host : `${host}:${port}`;
+}
+
+function renderCreateConnectionHelp(mode) {
+    const portId = mode === 'blank' ? 'cs-port' : 'csm-port';
+    const previewId = mode === 'blank' ? 'cs-connect-preview' : 'csm-connect-preview';
+    const target = getCreateNetworkTarget();
+    const port = parseInt(document.getElementById(portId)?.value || '25565', 10) || 25565;
+    const joinAddress = formatMinecraftAddress(target, port);
+
+    return `
+        <div class="card" style="background:var(--bg-input);margin-top:16px;">
+            <h4 style="margin-bottom:8px;">How Players Connect</h4>
+            <p style="color:var(--text-secondary);font-size:13px;margin-bottom:12px;">
+                Open inbound TCP port ${port} on Windows Firewall and your cloud or router firewall for public player access.
+            </p>
+            <div id="${previewId}" style="display:grid;gap:8px;">
+                <div><strong>Join Address:</strong> ${escapeHtml(joinAddress)}</div>
+                <div style="color:var(--text-muted);font-size:12px;">Panel-detected public IP: ${escapeHtml(createServerState.network?.public_ip || 'Unavailable')}</div>
+            </div>
+        </div>
+    `;
+}
+
+function updateCreateConnectionPreview(mode) {
+    const portId = mode === 'blank' ? 'cs-port' : 'csm-port';
+    const previewId = mode === 'blank' ? 'cs-connect-preview' : 'csm-connect-preview';
+    const preview = document.getElementById(previewId);
+    if (!preview) return;
+    const target = getCreateNetworkTarget();
+    const port = parseInt(document.getElementById(portId)?.value || '25565', 10) || 25565;
+    preview.innerHTML = `
+        <div><strong>Join Address:</strong> ${escapeHtml(formatMinecraftAddress(target, port))}</div>
+        <div style="color:var(--text-muted);font-size:12px;">Panel-detected public IP: ${escapeHtml(createServerState.network?.public_ip || 'Unavailable')}</div>
+    `;
 }
 
 function renderBlankServerForm() {
@@ -82,8 +138,9 @@ function renderBlankServerForm() {
         </div>
         <div class="form-group">
             <label class="form-label">Server Port</label>
-            <input class="form-input" id="cs-port" type="number" value="25565">
+            <input class="form-input" id="cs-port" type="number" min="1" max="65535" value="25565" oninput="updateCreateConnectionPreview('blank')">
         </div>
+        ${renderCreateConnectionHelp('blank')}
         <div style="margin-top: 20px;">
             <button class="btn btn-primary" onclick="doCreateServer()" id="cs-btn">&#10010; Create Server</button>
         </div>
@@ -120,7 +177,12 @@ function renderModpackServerForm() {
                     <option value="16G">16 GB</option>
                 </select>
             </div>
+            <div class="form-group">
+                <label class="form-label">Server Port</label>
+                <input class="form-input" id="csm-port" type="number" min="1" max="65535" value="25565" oninput="updateCreateConnectionPreview('modpack')">
+            </div>
         </div>
+        ${renderCreateConnectionHelp('modpack')}
         <div id="csm-results" style="margin-top:16px;"></div>
     `;
 }
@@ -178,7 +240,7 @@ async function searchModpacksForCreate() {
                             </div>
                         </div>
                         <div class="mod-card-actions">
-                            <button class="btn btn-primary btn-sm" onclick="selectModpackForCreate('${p.id}', '${escapeHtml(p.name)}')">Select</button>
+                            <button class="btn btn-primary btn-sm" onclick="selectModpackForCreate('${p.id}', '${encodeURIComponent(p.name || '')}')">Select</button>
                         </div>
                     </div>
                 `).join('')}
@@ -189,9 +251,11 @@ async function searchModpacksForCreate() {
     }
 }
 
-async function selectModpackForCreate(projectId, name) {
+async function selectModpackForCreate(projectId, encodedName) {
+    const name = decodeURIComponent(encodedName || '');
     const serverName = document.getElementById('csm-name').value || name + ' Server';
     const maxRam = document.getElementById('csm-maxram').value;
+    const port = parseInt(document.getElementById('csm-port').value || '25565', 10) || 25565;
     const results = document.getElementById('csm-results');
     results.innerHTML = loading('Fetching modpack versions...');
 
@@ -207,9 +271,9 @@ async function selectModpackForCreate(projectId, name) {
             <div class="card" style="background:var(--bg-input)">
                 <h4>Selected: ${escapeHtml(name)} - ${escapeHtml(v.name)}</h4>
                 <p style="color:var(--text-secondary);font-size:13px;margin:8px 0;">
-                    MC: ${v.game_versions.join(', ')} &middot; Loaders: ${v.loaders.join(', ')}
+                    MC: ${v.game_versions.join(', ')} &middot; Loaders: ${v.loaders.join(', ')} &middot; Port: ${port}
                 </p>
-                <button class="btn btn-success" id="csm-install-btn" onclick="createServerFromModpack('${escapeHtml(serverName)}', '${maxRam}', '${projectId}', '${v.id}')">
+                <button class="btn btn-success" id="csm-install-btn" onclick="createServerFromModpack('${encodeURIComponent(serverName)}', '${maxRam}', ${port}, '${projectId}', '${v.id}')">
                     &#9889; Create Server with this Modpack
                 </button>
             </div>
@@ -219,7 +283,8 @@ async function selectModpackForCreate(projectId, name) {
     }
 }
 
-async function createServerFromModpack(name, maxRam, projectId, versionId) {
+async function createServerFromModpack(encodedName, maxRam, port, projectId, versionId) {
+    const name = decodeURIComponent(encodedName || '');
     const btn = document.getElementById('csm-install-btn');
     btn.disabled = true;
     btn.innerHTML = '<div class="spinner"></div> Creating server & installing modpack...';
@@ -232,6 +297,7 @@ async function createServerFromModpack(name, maxRam, projectId, versionId) {
             minecraft_version: '1.20.4',
             min_ram: '2G',
             max_ram: maxRam,
+            port,
         });
 
         // Install modpack onto it

@@ -22,6 +22,11 @@ def get_system_stats():
     return SystemMonitor.get_system_stats()
 
 
+@router.get("/system/network")
+async def get_system_network():
+    return await SystemMonitor.get_network_info()
+
+
 @router.post("/backups/{server_id}")
 def create_backup(server_id: int, data: BackupCreate, db: Session = Depends(get_db)):
     return BackupManager.create_backup(db, server_id, data.backup_type, data.name)

@@ -2,6 +2,9 @@
 MCServerPanel - System Monitor Service
 Provides CPU, RAM, disk, and network usage information.
 """
+import socket
+
+import httpx
 import psutil
 from backend.config import settings
 
@@ -53,3 +56,38 @@ class SystemMonitor:
             }
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             return {"pid": pid, "error": "Process not found or access denied"}
+
+    @staticmethod
+    async def get_network_info() -> dict:
+        local_ips = []
+        try:
+            for addresses in psutil.net_if_addrs().values():
+                for address in addresses:
+                    if address.family == socket.AF_INET and address.address and not address.address.startswith("127."):
+                        local_ips.append(address.address)
+        except Exception:
+            pass
+
+        local_ips = sorted(set(local_ips))
+        public_ip = ""
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                resp = await client.get("https://api.ipify.org?format=json")
+                resp.raise_for_status()
+                public_ip = resp.json().get("ip", "")
+        except Exception:
+            public_ip = ""
+
+        panel_port = settings.PORT
+        panel_urls = []
+        if public_ip:
+            panel_urls.append(f"http://{public_ip}:{panel_port}")
+        panel_urls.extend([f"http://{ip}:{panel_port}" for ip in local_ips])
+
+        return {
+            "public_ip": public_ip,
+            "local_ips": local_ips,
+            "panel_port": panel_port,
+            "panel_urls": panel_urls,
+            "default_minecraft_port": settings.DEFAULT_PORT,
+        }

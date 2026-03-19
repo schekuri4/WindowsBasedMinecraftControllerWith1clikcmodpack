@@ -120,6 +120,7 @@ const API = {
     // System & Backups
     system: {
         stats: () => API.get('/system/stats'),
+        network: () => API.get('/system/network'),
     },
 
     backups: {
