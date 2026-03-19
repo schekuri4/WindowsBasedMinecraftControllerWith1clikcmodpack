@@ -2,6 +2,8 @@
  * Server Detail Page - Console, Settings, Mods, Backups
  */
 let consoleInterval = null;
+let consoleAutoScroll = true;
+let consoleFilter = '';
 
 function formatServerJoinAddress(host, port) {
     if (!host) return 'Unavailable';
@@ -138,7 +140,19 @@ function switchServerTab(tab, serverId) {
 
 function renderConsoleTab(serverId) {
     return `
-        <div class="card">
+        <div class="card" style="padding:0;overflow:hidden;">
+            <div class="console-toolbar">
+                <div class="console-toolbar-left">
+                    <span class="console-line-count" id="console-line-count">0 lines</span>
+                    <input class="console-filter" id="console-filter" placeholder="Filter logs..." oninput="consoleFilter=this.value.toLowerCase()">
+                </div>
+                <div class="console-toolbar-right">
+                    <button class="btn btn-sm console-tool-btn" id="console-scroll-btn" onclick="toggleAutoScroll()" title="Auto-scroll">
+                        &#8595; Auto-scroll: ON
+                    </button>
+                    <button class="btn btn-sm console-tool-btn" onclick="clearConsoleDisplay()" title="Clear display">Clear</button>
+                </div>
+            </div>
             <div class="console" id="console-output">Connecting to console...</div>
             <div class="console-input-row">
                 <input class="form-input" id="console-cmd" placeholder="Type a command..." onkeydown="if(event.key==='Enter')sendCmd(${serverId})">
@@ -146,6 +160,24 @@ function renderConsoleTab(serverId) {
             </div>
         </div>
     `;
+}
+
+function toggleAutoScroll() {
+    consoleAutoScroll = !consoleAutoScroll;
+    const btn = document.getElementById('console-scroll-btn');
+    if (btn) {
+        btn.innerHTML = consoleAutoScroll ? '&#8595; Auto-scroll: ON' : '&#8645; Auto-scroll: OFF';
+        btn.classList.toggle('active', consoleAutoScroll);
+    }
+    if (consoleAutoScroll) {
+        const el = document.getElementById('console-output');
+        if (el) el.scrollTop = el.scrollHeight;
+    }
+}
+
+function clearConsoleDisplay() {
+    const el = document.getElementById('console-output');
+    if (el) el.innerHTML = '<span class="console-line" style="color:var(--text-muted)">Console cleared.</span>';
 }
 
 function startConsolePolling(serverId) {
@@ -158,18 +190,33 @@ async function fetchConsole(serverId) {
         const data = await API.servers.console(serverId);
         const el = document.getElementById('console-output');
         if (!el) return;
+
+        // Detect if user has scrolled up (not near bottom)
+        const wasNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+
         if (data.lines.length === 0) {
             el.innerHTML = '<span class="console-line" style="color:var(--text-muted)">No output yet. Start the server to see console output.</span>';
         } else {
-            el.innerHTML = data.lines.map(line => {
+            const filtered = consoleFilter
+                ? data.lines.filter(l => l.toLowerCase().includes(consoleFilter))
+                : data.lines;
+            el.innerHTML = filtered.map(line => {
                 let cls = '';
-                if (/\bwarn/i.test(line)) cls = 'warn';
-                else if (/\berror|exception|fatal/i.test(line)) cls = 'error';
+                if (/\berror|exception|fatal/i.test(line)) cls = 'error';
+                else if (/\bwarn/i.test(line)) cls = 'warn';
                 else if (/\binfo/i.test(line)) cls = 'info';
                 return `<div class="console-line ${cls}">${escapeHtml(line)}</div>`;
             }).join('');
-            el.scrollTop = el.scrollHeight;
+
+            // Only auto-scroll if the toggle is on AND user was already near the bottom
+            if (consoleAutoScroll && wasNearBottom) {
+                el.scrollTop = el.scrollHeight;
+            }
         }
+
+        // Update line count
+        const countEl = document.getElementById('console-line-count');
+        if (countEl) countEl.textContent = `${data.lines.length} lines`;
     } catch (e) { /* ignore */ }
 }
 
