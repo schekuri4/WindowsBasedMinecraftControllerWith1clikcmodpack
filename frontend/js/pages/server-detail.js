@@ -3,14 +3,45 @@
  */
 let consoleInterval = null;
 
+function formatServerJoinAddress(host, port) {
+    if (!host) return 'Unavailable';
+    return Number(port) === 25565 ? host : `${host}:${port}`;
+}
+
+function renderServerConnectionCard(server, network) {
+    const target = network?.public_ip || network?.local_ips?.[0] || '';
+    const joinAddress = formatServerJoinAddress(target, server.port);
+    return `
+        <div class="card" style="margin-bottom:20px;">
+            <h3 style="margin-bottom:12px;">How To Connect</h3>
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label">Join Address</label>
+                    <input class="form-input" value="${escapeHtml(joinAddress)}" readonly>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Server Port</label>
+                    <input class="form-input" value="${server.port}" readonly>
+                </div>
+            </div>
+            <p style="color:var(--text-secondary);font-size:13px;">
+                Players connect with the join address above. Open inbound TCP port ${server.port} in Windows Firewall and your cloud or router firewall.
+            </p>
+        </div>
+    `;
+}
+
 async function renderServerDetail(params) {
     const main = document.getElementById('main-content');
     main.innerHTML = loading('Loading server...');
     clearInterval(consoleInterval);
 
     try {
-        const server = await API.servers.get(params.id);
-        const status = await API.servers.status(params.id);
+        const [server, status, network] = await Promise.all([
+            API.servers.get(params.id),
+            API.servers.status(params.id),
+            API.system.network().catch(() => null),
+        ]);
 
         main.innerHTML = `
             <div class="page-header">
@@ -30,6 +61,8 @@ async function renderServerDetail(params) {
                     <button class="btn btn-secondary" onclick="navigate('servers')">&#8592; Back</button>
                 </div>
             </div>
+
+            ${renderServerConnectionCard(server, network)}
 
             <!-- Resource stats -->
             <div class="stats-grid">
@@ -302,7 +335,12 @@ async function loadServerMods(serverId) {
     const content = document.getElementById('server-tab-content');
     content.innerHTML = loading('Loading installed mods...');
     try {
-        const mods = await API.mods.installed(serverId);
+        const [server, mods] = await Promise.all([
+            API.servers.get(serverId),
+            API.mods.installed(serverId),
+        ]);
+        const contentLoader = (server.server_type === 'forge' || server.server_type === 'fabric') ? server.server_type : '';
+
         content.innerHTML = `
             <div class="card">
                 <div class="card-header">
@@ -327,6 +365,34 @@ async function loadServerMods(serverId) {
                         `).join('')}</tbody>
                     </table></div>`
                 }
+            </div>
+
+            <div class="card" style="margin-top:20px;">
+                <h3 style="margin-bottom:8px;">Compatible Mods For This Server</h3>
+                <p style="color:var(--text-secondary);font-size:13px;margin-bottom:12px;">
+                    Compatibility locked to MC ${escapeHtml(server.minecraft_version || '?')} ${contentLoader ? `&middot; ${escapeHtml(contentLoader)}` : ''}
+                </p>
+                <div class="form-row" style="grid-template-columns:1fr auto;">
+                    <div class="form-group" style="margin:0;">
+                        <input class="form-input" id="srv-mod-search" placeholder="Search compatible mods..." onkeydown="if(event.key==='Enter')searchServerCompatibleMods(${serverId})">
+                    </div>
+                    <button class="btn btn-primary" onclick="searchServerCompatibleMods(${serverId})">&#128270; Search</button>
+                </div>
+                <div id="srv-mod-results" style="margin-top:12px;">${emptyState('&#128295;', 'Search for compatible mods', 'Only versions matching this server are used.')}</div>
+            </div>
+
+            <div class="card" style="margin-top:20px;">
+                <h3 style="margin-bottom:8px;">Compatible Modpacks For This Server</h3>
+                <p style="color:var(--text-secondary);font-size:13px;margin-bottom:12px;">
+                    Results are filtered by MC ${escapeHtml(server.minecraft_version || '?')} and ${contentLoader || 'loader-agnostic'} compatibility.
+                </p>
+                <div class="form-row" style="grid-template-columns:1fr auto;">
+                    <div class="form-group" style="margin:0;">
+                        <input class="form-input" id="srv-modpack-search" placeholder="Search compatible modpacks..." onkeydown="if(event.key==='Enter')searchServerCompatibleModpacks(${serverId})">
+                    </div>
+                    <button class="btn btn-primary" onclick="searchServerCompatibleModpacks(${serverId})">&#128270; Search</button>
+                </div>
+                <div id="srv-modpack-results" style="margin-top:12px;">${emptyState('&#128230;', 'Search for compatible modpacks', 'Only compatible versions will be installed.')}</div>
             </div>
         `;
     } catch (err) {
@@ -353,6 +419,160 @@ async function checkModUpdates(serverId) {
             toast('All mods are up to date!', 'success');
         } else {
             toast(`${updates.length} update(s) available`, 'warning');
+        }
+    } catch (err) {
+        toast(err.message, 'error');
+    }
+}
+
+async function searchServerCompatibleMods(serverId) {
+    const results = document.getElementById('srv-mod-results');
+    if (!results) return;
+    results.innerHTML = loading('Searching compatible mods...');
+
+    try {
+        const [server] = await Promise.all([API.servers.get(serverId)]);
+        const query = document.getElementById('srv-mod-search')?.value || '';
+        const loader = (server.server_type === 'forge' || server.server_type === 'fabric') ? server.server_type : '';
+        const data = await API.mods.searchModrinth({
+            query,
+            mc_version: server.minecraft_version || '',
+            loader,
+            offset: 0,
+            limit: 20,
+        });
+
+        if (!data.results?.length) {
+            results.innerHTML = emptyState('&#128270;', 'No compatible mods found', 'Try another search term.');
+            return;
+        }
+
+        results.innerHTML = `
+            <div class="mod-grid">
+                ${data.results.map(m => `
+                    <div class="mod-card">
+                        <img class="mod-icon" src="${m.icon_url || ''}" alt="" onerror="this.style.display='none'">
+                        <div class="mod-card-info">
+                            <h4>${escapeHtml(m.name)}</h4>
+                            <p>${escapeHtml(m.description)}</p>
+                            <div class="mod-card-meta">
+                                <span>&#11015; ${formatNumber(m.downloads)}</span>
+                                <span>${escapeHtml(m.author)}</span>
+                            </div>
+                        </div>
+                        <div class="mod-card-actions">
+                            <button class="btn btn-success btn-sm" onclick="installServerCompatibleMod(${serverId}, '${m.id}', '${encodeURIComponent(m.name || '')}')">Install</button>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    } catch (err) {
+        results.innerHTML = emptyState('&#9888;', 'Search failed', err.message);
+    }
+}
+
+async function installServerCompatibleMod(serverId, projectId, encodedName) {
+    const modName = decodeURIComponent(encodedName || '');
+    toast(`Installing ${modName}...`, 'info');
+    try {
+        const server = await API.servers.get(serverId);
+        const loader = (server.server_type === 'forge' || server.server_type === 'fabric') ? server.server_type : '';
+        const versions = await API.mods.versions(projectId, {
+            mc_version: server.minecraft_version || '',
+            loader,
+        });
+        if (!versions.length) {
+            toast('No compatible version found for this server', 'warning');
+            return;
+        }
+        const result = await API.mods.install(serverId, {
+            source: 'modrinth',
+            project_id: projectId,
+            version_id: versions[0].id,
+        });
+        if (result.success) {
+            toast(`Installed ${result.mod_name}`, 'success');
+            loadServerMods(serverId);
+        } else {
+            toast(result.error || 'Install failed', 'error');
+        }
+    } catch (err) {
+        toast(err.message, 'error');
+    }
+}
+
+async function searchServerCompatibleModpacks(serverId) {
+    const results = document.getElementById('srv-modpack-results');
+    if (!results) return;
+    results.innerHTML = loading('Searching compatible modpacks...');
+
+    try {
+        const server = await API.servers.get(serverId);
+        const query = document.getElementById('srv-modpack-search')?.value || '';
+        const loader = (server.server_type === 'forge' || server.server_type === 'fabric') ? server.server_type : '';
+        const data = await API.modpacks.searchModrinth({
+            query,
+            mc_version: server.minecraft_version || '',
+            loader,
+            offset: 0,
+            limit: 20,
+        });
+
+        if (!data.results?.length) {
+            results.innerHTML = emptyState('&#128270;', 'No compatible modpacks found', 'Try another search term.');
+            return;
+        }
+
+        results.innerHTML = `
+            <div class="mod-grid">
+                ${data.results.map(p => `
+                    <div class="mod-card">
+                        <img class="mod-icon" src="${p.icon_url || ''}" alt="" onerror="this.style.display='none'">
+                        <div class="mod-card-info">
+                            <h4>${escapeHtml(p.name)}</h4>
+                            <p>${escapeHtml(p.description)}</p>
+                            <div class="mod-card-meta">
+                                <span>&#11015; ${formatNumber(p.downloads)}</span>
+                                <span>${escapeHtml(p.author)}</span>
+                            </div>
+                        </div>
+                        <div class="mod-card-actions">
+                            <button class="btn btn-success btn-sm" onclick="installServerCompatibleModpack(${serverId}, '${p.id}', '${encodeURIComponent(p.name || '')}')">Install</button>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    } catch (err) {
+        results.innerHTML = emptyState('&#9888;', 'Search failed', err.message);
+    }
+}
+
+async function installServerCompatibleModpack(serverId, projectId, encodedName) {
+    const packName = decodeURIComponent(encodedName || '');
+    toast(`Installing ${packName}...`, 'info');
+    try {
+        const server = await API.servers.get(serverId);
+        const loader = (server.server_type === 'forge' || server.server_type === 'fabric') ? server.server_type : '';
+        const versions = await API.modpacks.versions(projectId, {
+            mc_version: server.minecraft_version || '',
+            loader,
+        });
+        if (!versions.length) {
+            toast('No compatible modpack version found for this server', 'warning');
+            return;
+        }
+        const result = await API.modpacks.install(serverId, {
+            source: 'modrinth',
+            project_id: projectId,
+            version_id: versions[0].id,
+        });
+        if (result.success) {
+            toast(`Installed modpack ${packName}`, 'success');
+            loadServerMods(serverId);
+        } else {
+            toast(result.error || 'Install failed', 'error');
         }
     } catch (err) {
         toast(err.message, 'error');

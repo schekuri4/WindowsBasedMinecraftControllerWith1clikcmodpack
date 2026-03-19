@@ -50,6 +50,10 @@ class ServerManager:
         server_path = settings.SERVERS_DIR / safe_name
         server_path.mkdir(parents=True, exist_ok=True)
 
+        resolved_java_path = java_path
+        if not resolved_java_path or resolved_java_path == "java":
+            resolved_java_path = JavaManager.get_best_java_path(minecraft_version)
+
         server = Server(
             name=name,
             path=str(server_path),
@@ -60,7 +64,7 @@ class ServerManager:
             max_ram=max_ram,
             jvm_args=settings.DEFAULT_JVM_ARGS,
             port=port,
-            java_path=java_path,
+            java_path=resolved_java_path,
         )
         db.add(server)
         db.commit()
@@ -195,11 +199,28 @@ class ServerManager:
         server = db.query(Server).filter(Server.id == server_id).first()
         if not server:
             return None
+        new_port = kwargs.get("port")
         for key, value in kwargs.items():
             if hasattr(server, key):
                 setattr(server, key, value)
         db.commit()
         db.refresh(server)
+
+        if new_port is not None:
+            server_path = Path(server.path)
+            props_path = server_path / "server.properties"
+            try:
+                if props_path.exists():
+                    text = props_path.read_text(encoding="utf-8")
+                    if re.search(r"^server-port=.*$", text, flags=re.MULTILINE):
+                        text = re.sub(r"^server-port=.*$", f"server-port={server.port}", text, flags=re.MULTILINE)
+                    else:
+                        text += f"\nserver-port={server.port}\n"
+                else:
+                    text = f"server-port={server.port}\nonline-mode=true\nmax-players=20\ndifficulty=normal\n"
+                props_path.write_text(text, encoding="utf-8")
+            except Exception:
+                pass
         return server
 
     @staticmethod
@@ -235,8 +256,19 @@ class ServerManager:
         if not jar_path.exists():
             return {"success": False, "error": f"Server jar not found: {server.server_jar}"}
 
+        java_executable = server.java_path or "java"
+        if java_executable == "java" or not Path(java_executable).exists():
+            detected_java = JavaManager.get_best_java_path(server.minecraft_version)
+            if detected_java != "java":
+                java_executable = detected_java
+                server.java_path = detected_java
+                db.commit()
+
+        if java_executable == "java" and not shutil.which("java"):
+            return {"success": False, "error": "Java not found. Please install Java 17+ or select a Java path in server settings."}
+
         cmd = [
-            server.java_path or "java",
+            java_executable,
             f"-Xms{server.min_ram}",
             f"-Xmx{server.max_ram}",
         ]

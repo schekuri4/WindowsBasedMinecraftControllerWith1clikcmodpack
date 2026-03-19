@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import httpx
+from httpx import HTTPStatusError
 from sqlalchemy.orm import Session
 
 from backend.config import settings
@@ -125,18 +126,35 @@ class PluginInstaller:
     ) -> dict:
         page = offset // max(limit, 1)
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            data = []
             if query:
-                resp = await client.get(
-                    f"https://api.spiget.org/v2/search/resources/{quote(query)}",
-                    params={"size": limit, "page": page},
-                )
+                try:
+                    resp = await client.get(
+                        f"https://api.spiget.org/v2/search/resources/{quote(query)}",
+                        params={"size": limit, "page": page},
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                except HTTPStatusError:
+                    # Spiget search can return 404 for some multi-word queries; fallback to free resources and filter locally.
+                    resp = await client.get(
+                        "https://api.spiget.org/v2/resources/free",
+                        params={"size": max(limit * 3, 30), "page": page, "sort": "-downloads"},
+                    )
+                    resp.raise_for_status()
+                    q_lower = query.lower()
+                    data = [
+                        item for item in resp.json()
+                        if q_lower in item.get("name", "").lower() or q_lower in item.get("tag", "").lower()
+                    ]
             else:
                 resp = await client.get(
                     "https://api.spiget.org/v2/resources/free",
                     params={"size": limit, "page": page, "sort": "-downloads"},
                 )
-            resp.raise_for_status()
-            data = resp.json()
+                resp.raise_for_status()
+                data = resp.json()
+
             results = []
             for resource in data:
                 tested_versions = resource.get("testedVersions", [])

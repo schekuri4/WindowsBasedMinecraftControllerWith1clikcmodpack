@@ -99,15 +99,67 @@ class JavaManager:
     @staticmethod
     def get_recommended_java(minecraft_version: str) -> int:
         """Return recommended Java major version for a Minecraft version."""
+        major, minor, patch = JavaManager._parse_mc_version(minecraft_version)
+
+        # 1.20.5+ generally requires Java 21+
+        if major > 1 or (major == 1 and (minor > 20 or (minor == 20 and patch >= 5))):
+            return 21
+
+        # 1.18 - 1.20.4 generally run best on Java 17
+        if major == 1 and 18 <= minor <= 20:
+            return 17
+
+        # 1.17 targets Java 16
+        if major == 1 and minor == 17:
+            return 16
+
+        # Older versions typically target Java 8
+        return 8
+
+    @staticmethod
+    def _parse_mc_version(minecraft_version: str) -> tuple[int, int, int]:
+        """Parse a Minecraft version string into (major, minor, patch)."""
         try:
-            parts = minecraft_version.split(".")
-            if len(parts) >= 2:
-                minor = int(parts[1])
-                if minor >= 21:
-                    return 21
-                if minor >= 17:
-                    return 17
-                return 8
-        except (ValueError, IndexError):
-            pass
-        return 17
+            core = minecraft_version.split('-')[0].strip()
+            parts = core.split('.')
+            major = int(parts[0]) if len(parts) > 0 and parts[0].isdigit() else 1
+            minor = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+            patch = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+            return major, minor, patch
+        except Exception:
+            return 1, 20, 0
+
+    @staticmethod
+    def _compatible_java_majors(minecraft_version: str) -> list[int]:
+        """Return compatible Java majors for a Minecraft version, in priority order."""
+        recommended = JavaManager.get_recommended_java(minecraft_version)
+        if recommended == 21:
+            return [21, 22, 23]
+        if recommended == 17:
+            return [17]
+        if recommended == 16:
+            return [16]
+        return [8]
+
+    @staticmethod
+    def get_best_java_path(minecraft_version: str) -> str:
+        """Return the best available Java executable path for a Minecraft version."""
+        installations = JavaManager.find_java_installations()
+        if not installations:
+            return "java"
+
+        for major in JavaManager._compatible_java_majors(minecraft_version):
+            matches = [item for item in installations if item.get("major_version", 0) == major]
+            if matches:
+                matches.sort(key=lambda item: item.get("is_64bit", False), reverse=True)
+                return matches[0].get("path", "java")
+
+        return "java"
+
+    @staticmethod
+    def is_java_compatible(java_path: str, minecraft_version: str) -> bool:
+        """Check whether a Java executable is compatible with a Minecraft version."""
+        info = JavaManager._get_java_info(java_path)
+        if not info:
+            return False
+        return info.get("major_version", 0) in JavaManager._compatible_java_majors(minecraft_version)
