@@ -272,6 +272,13 @@ class ServerManager:
         if not jar_path.exists():
             return {"success": False, "error": f"Server jar not found: {server.server_jar}"}
 
+        # Remove session.lock to prevent "another process has locked" errors
+        for lock_file in server_path.rglob("session.lock"):
+            try:
+                lock_file.unlink()
+            except Exception:
+                pass
+
         java_executable = server.java_path or "java"
         if java_executable == "java" or not Path(java_executable).exists():
             detected_java = JavaManager.get_best_java_path(server.minecraft_version)

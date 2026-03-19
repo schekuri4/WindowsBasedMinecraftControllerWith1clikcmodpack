@@ -331,7 +331,10 @@ class ModpackInstaller:
             loader_version = ""
             deps = index.get("dependencies", {})
             mc_version = deps.get("minecraft", "")
-            if "forge" in deps:
+            if "neoforge" in deps:
+                loader = "neoforge"
+                loader_version = deps["neoforge"]
+            elif "forge" in deps:
                 loader = "forge"
                 loader_version = deps["forge"]
             elif "fabric-loader" in deps:
@@ -375,23 +378,22 @@ class ModpackInstaller:
                         shutil.copy2(item, dest)
 
             # Install the server loader if needed
-            if loader == "forge" and mc_version:
-                try:
+            jar = None
+            try:
+                if loader == "neoforge" and mc_version:
+                    jar = await ServerManager.download_neoforge_installer(mc_version, str(server_path))
+                elif loader == "forge" and mc_version:
                     jar = await ServerManager.download_forge_installer(mc_version, str(server_path))
-                    server.server_jar = jar
-                except Exception as e:
-                    return {"success": False, "error": f"Failed to install Forge: {e}"}
-            elif loader == "fabric" and mc_version:
-                try:
+                elif loader == "fabric" and mc_version:
                     jar = await ServerManager.download_fabric_server(mc_version, str(server_path))
-                    server.server_jar = jar
-                except Exception as e:
-                    return {"success": False, "error": f"Failed to install Fabric: {e}"}
-            else:
-                try:
+                elif loader == "quilt" and mc_version:
+                    jar = await ServerManager.download_quilt_server(mc_version, str(server_path))
+                else:
                     await ServerManager.download_vanilla_jar(mc_version, str(server_path))
-                except Exception:
-                    pass
+            except Exception as e:
+                return {"success": False, "error": f"Failed to install {loader or 'vanilla'}: {e}"}
+            if jar:
+                server.server_jar = jar
 
             # Update server record
             server.server_type = loader or "vanilla"
@@ -489,18 +491,25 @@ class ModpackInstaller:
             mc_version = mc_info.get("version", "")
             for mod_loader in mc_info.get("modLoaders", []):
                 lid = mod_loader.get("id", "")
-                if lid.startswith("forge-"):
+                if lid.startswith("neoforge-"):
+                    loader = "neoforge"
+                    loader_version = lid.replace("neoforge-", "")
+                elif lid.startswith("forge-"):
                     loader = "forge"
                     loader_version = lid.replace("forge-", "")
                 elif lid.startswith("fabric-"):
                     loader = "fabric"
                     loader_version = lid.replace("fabric-", "")
+                elif lid.startswith("quilt-"):
+                    loader = "quilt"
+                    loader_version = lid.replace("quilt-", "")
 
             # Download each mod file
             mods_dir = server_path / "mods"
             mods_dir.mkdir(exist_ok=True)
 
             installed_count = 0
+            skipped_mods = []
             for mod_file in manifest.get("files", []):
                 cf_project_id = mod_file["projectID"]
                 cf_file_id = mod_file["fileID"]
@@ -512,13 +521,20 @@ class ModpackInstaller:
                     file_resp.raise_for_status()
                     fdata = file_resp.json()["data"]
                     dl_url = fdata.get("downloadUrl")
-                    if dl_url:
-                        mod_resp = await client.get(dl_url)
-                        mod_resp.raise_for_status()
-                        mod_path = mods_dir / fdata["fileName"]
-                        mod_path.write_bytes(mod_resp.content)
-                        installed_count += 1
-                except Exception:
+                    # Fallback: construct edge download URL when author disabled direct downloads
+                    if not dl_url:
+                        file_id_str = str(cf_file_id)
+                        dl_url = (
+                            f"https://edge.forgecdn.net/files/"
+                            f"{file_id_str[:4]}/{file_id_str[4:]}/{fdata['fileName']}"
+                        )
+                    mod_resp = await client.get(dl_url)
+                    mod_resp.raise_for_status()
+                    mod_path = mods_dir / fdata["fileName"]
+                    mod_path.write_bytes(mod_resp.content)
+                    installed_count += 1
+                except Exception as e:
+                    skipped_mods.append(str(cf_project_id))
                     continue
 
             # Copy overrides
@@ -533,18 +549,20 @@ class ModpackInstaller:
                         shutil.copy2(item, dest)
 
             # Install loader
-            if loader == "forge" and mc_version:
-                try:
+            jar = None
+            try:
+                if loader == "neoforge" and mc_version:
+                    jar = await ServerManager.download_neoforge_installer(mc_version, str(server_path))
+                elif loader == "forge" and mc_version:
                     jar = await ServerManager.download_forge_installer(mc_version, str(server_path))
-                    server.server_jar = jar
-                except Exception as e:
-                    return {"success": False, "error": f"Forge install failed: {e}"}
-            elif loader == "fabric" and mc_version:
-                try:
+                elif loader == "fabric" and mc_version:
                     jar = await ServerManager.download_fabric_server(mc_version, str(server_path))
-                    server.server_jar = jar
-                except Exception as e:
-                    return {"success": False, "error": f"Fabric install failed: {e}"}
+                elif loader == "quilt" and mc_version:
+                    jar = await ServerManager.download_quilt_server(mc_version, str(server_path))
+            except Exception as e:
+                return {"success": False, "error": f"{loader} install failed: {e}"}
+            if jar:
+                server.server_jar = jar
 
             server.server_type = loader or "vanilla"
             server.minecraft_version = mc_version
@@ -579,6 +597,7 @@ class ModpackInstaller:
                 "minecraft_version": mc_version,
                 "loader": loader,
                 "files_installed": installed_count,
+                "files_skipped": len(skipped_mods),
             }
 
     # -------------------------------------------------------------------

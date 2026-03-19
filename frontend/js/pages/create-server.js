@@ -347,11 +347,11 @@ async function createServerFromModpack(encodedName, maxRam, port, source, projec
     btn.innerHTML = '<div class="spinner"></div> Creating server & installing modpack...';
 
     try {
-        // Create blank server first
+        // Create blank server first (vanilla placeholder; modpack install will set correct type & version)
         const server = await API.servers.create({
             name,
             server_type: 'vanilla',
-            minecraft_version: '1.20.4',
+            minecraft_version: '1.21.1',
             min_ram: '2G',
             max_ram: maxRam,
             port,
