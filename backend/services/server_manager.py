@@ -208,6 +208,7 @@ class ServerManager:
 
     @staticmethod
     def list_servers(db: Session) -> list[Server]:
+        ServerManager._reconcile_statuses(db)
         return db.query(Server).all()
 
     @staticmethod
@@ -258,14 +259,57 @@ class ServerManager:
     # Start / Stop / Console
     # -------------------------------------------------------------------
     @staticmethod
+    def _reconcile_statuses(db: Session):
+        """Fix stale 'running' statuses in the DB.
+
+        After a uvicorn reload or crash, the in-memory _processes dict is
+        empty but the DB may still say 'running'.  Walk every server that
+        claims to be running and verify its process is actually alive.
+        """
+        stale = (
+            db.query(Server)
+            .filter(Server.status == "running")
+            .all()
+        )
+        for server in stale:
+            alive = False
+            # Check our tracked processes first
+            if server.id in ServerManager._processes:
+                proc = ServerManager._processes[server.id]
+                if proc.poll() is None:
+                    alive = True
+                else:
+                    ServerManager._processes.pop(server.id, None)
+                    ServerManager._console_buffers.pop(server.id, None)
+            # Fallback: check if the PID recorded in the DB is still a Java process
+            if not alive and server.pid:
+                try:
+                    ps = psutil.Process(server.pid)
+                    if ps.is_running() and 'java' in ps.name().lower():
+                        alive = True
+                    else:
+                        alive = False
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    alive = False
+            if not alive:
+                server.status = "stopped"
+                server.pid = None
+        db.commit()
+
+    @staticmethod
     def start_server(db: Session, server_id: int) -> dict:
         server = db.query(Server).filter(Server.id == server_id).first()
         if not server:
             return {"success": False, "error": "Server not found"}
+
+        # Clean up stale tracked process for this server
         if server_id in ServerManager._processes:
             proc = ServerManager._processes[server_id]
             if proc.poll() is None:
                 return {"success": False, "error": "Server is already running"}
+            # Process exited — clean up
+            ServerManager._processes.pop(server_id, None)
+            ServerManager._console_buffers.pop(server_id, None)
 
         server_path = Path(server.path)
         jar_path = server_path / server.server_jar
@@ -285,11 +329,27 @@ class ServerManager:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(1)
                 if s.connect_ex(('127.0.0.1', server.port)) == 0:
-                    return {
-                        "success": False,
-                        "error": f"Port {server.port} is already in use. "
-                                 f"Stop the other server or change this server's port in Settings."
-                    }
+                    # Try to find and kill the orphan process holding the port
+                    killed = False
+                    try:
+                        for conn in psutil.net_connections(kind='tcp'):
+                            if conn.laddr.port == server.port and conn.status == 'LISTEN':
+                                try:
+                                    orphan = psutil.Process(conn.pid)
+                                    if 'java' in orphan.name().lower():
+                                        orphan.terminate()
+                                        orphan.wait(timeout=5)
+                                        killed = True
+                                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+                                    pass
+                    except (psutil.AccessDenied, OSError):
+                        pass
+                    if not killed:
+                        return {
+                            "success": False,
+                            "error": f"Port {server.port} is already in use. "
+                                     f"Stop the other server or change this server's port in Settings."
+                        }
         except Exception:
             pass
 
@@ -347,12 +407,25 @@ class ServerManager:
     @staticmethod
     def stop_server(db: Session, server_id: int) -> dict:
         if server_id not in ServerManager._processes:
+            # No tracked process — but a Java process may still be alive from
+            # a previous uvicorn session.  Try to kill it by stored PID.
             server = db.query(Server).filter(Server.id == server_id).first()
+            if server and server.pid:
+                try:
+                    ps = psutil.Process(server.pid)
+                    if ps.is_running() and 'java' in ps.name().lower():
+                        ps.terminate()
+                        ps.wait(timeout=10)
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+                    try:
+                        psutil.Process(server.pid).kill()
+                    except Exception:
+                        pass
             if server:
                 server.status = "stopped"
                 server.pid = None
                 db.commit()
-            return {"success": True, "message": "Server was not running"}
+            return {"success": True, "message": "Server stopped"}
 
         proc = ServerManager._processes[server_id]
         try:
@@ -434,6 +507,21 @@ class ServerManager:
                 server.pid = None
                 db.commit()
                 ServerManager._processes.pop(server_id, None)
+        elif server.status == "running":
+            # Not tracked in memory — check if the stored PID is actually alive
+            if server.pid:
+                try:
+                    ps = psutil.Process(server.pid)
+                    if ps.is_running() and 'java' in ps.name().lower():
+                        is_running = True
+                        cpu = ps.cpu_percent(interval=0.5)
+                        memory_mb = ps.memory_info().rss / (1024 * 1024)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            if not is_running:
+                server.status = "stopped"
+                server.pid = None
+                db.commit()
 
         # Directory size
         server_path = Path(server.path)
