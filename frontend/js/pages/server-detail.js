@@ -1,0 +1,436 @@
+/**
+ * Server Detail Page - Console, Settings, Mods, Backups
+ */
+let consoleInterval = null;
+
+async function renderServerDetail(params) {
+    const main = document.getElementById('main-content');
+    main.innerHTML = loading('Loading server...');
+    clearInterval(consoleInterval);
+
+    try {
+        const server = await API.servers.get(params.id);
+        const status = await API.servers.status(params.id);
+
+        main.innerHTML = `
+            <div class="page-header">
+                <div>
+                    <h2>${escapeHtml(server.name)}</h2>
+                    <div class="subtitle">
+                        ${serverTypeTag(server.server_type)} MC ${escapeHtml(server.minecraft_version || '?')}
+                        &nbsp;&middot;&nbsp; Port ${server.port}
+                        &nbsp;&middot;&nbsp; ${statusBadge(status.status)}
+                    </div>
+                </div>
+                <div class="btn-group">
+                    ${status.status === 'running'
+                        ? `<button class="btn btn-danger" onclick="stopServer(${server.id})">&#9632; Stop</button>`
+                        : `<button class="btn btn-success" onclick="startServer(${server.id})">&#9654; Start</button>`
+                    }
+                    <button class="btn btn-secondary" onclick="navigate('servers')">&#8592; Back</button>
+                </div>
+            </div>
+
+            <!-- Resource stats -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon cpu">&#128187;</div>
+                    <div>
+                        <div class="stat-value" id="srv-cpu">${status.cpu_percent}%</div>
+                        <div class="stat-label">CPU</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon ram">&#128202;</div>
+                    <div>
+                        <div class="stat-value" id="srv-ram">${status.memory_mb} MB</div>
+                        <div class="stat-label">Memory (${server.max_ram} max)</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon disk">&#128191;</div>
+                    <div>
+                        <div class="stat-value">${status.disk_mb} MB</div>
+                        <div class="stat-label">Disk Usage</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tabs -->
+            <div class="tabs">
+                <div class="tab active" onclick="switchServerTab('console', ${server.id})">Console</div>
+                <div class="tab" onclick="switchServerTab('settings', ${server.id})">Settings</div>
+                <div class="tab" onclick="switchServerTab('mods', ${server.id})">Mods</div>
+                <div class="tab" onclick="switchServerTab('srv-backups', ${server.id})">Backups</div>
+            </div>
+
+            <div id="server-tab-content">
+                ${renderConsoleTab(server.id)}
+            </div>
+        `;
+
+        // Start polling console
+        startConsolePolling(server.id);
+    } catch (err) {
+        main.innerHTML = `<div class="card">${emptyState('&#9888;', 'Server not found', err.message)}</div>`;
+    }
+}
+
+function switchServerTab(tab, serverId) {
+    document.querySelectorAll('.tabs .tab').forEach((t, i) => {
+        t.classList.toggle('active', t.textContent.trim().toLowerCase().replace(/\s+/g, '-') ===
+            {console: 'console', settings: 'settings', mods: 'mods', 'srv-backups': 'backups'}[tab]);
+    });
+
+    // Simpler approach: activate by index
+    const tabs = document.querySelectorAll('.tabs .tab');
+    tabs.forEach(t => t.classList.remove('active'));
+    const tabIndex = { console: 0, settings: 1, mods: 2, 'srv-backups': 3 }[tab];
+    if (tabs[tabIndex]) tabs[tabIndex].classList.add('active');
+
+    const content = document.getElementById('server-tab-content');
+    clearInterval(consoleInterval);
+
+    if (tab === 'console') {
+        content.innerHTML = renderConsoleTab(serverId);
+        startConsolePolling(serverId);
+    } else if (tab === 'settings') {
+        loadServerSettings(serverId);
+    } else if (tab === 'mods') {
+        loadServerMods(serverId);
+    } else if (tab === 'srv-backups') {
+        loadServerBackups(serverId);
+    }
+}
+
+function renderConsoleTab(serverId) {
+    return `
+        <div class="card">
+            <div class="console" id="console-output">Connecting to console...</div>
+            <div class="console-input-row">
+                <input class="form-input" id="console-cmd" placeholder="Type a command..." onkeydown="if(event.key==='Enter')sendCmd(${serverId})">
+                <button class="btn btn-primary" onclick="sendCmd(${serverId})">Send</button>
+            </div>
+        </div>
+    `;
+}
+
+function startConsolePolling(serverId) {
+    fetchConsole(serverId);
+    consoleInterval = setInterval(() => fetchConsole(serverId), 2000);
+}
+
+async function fetchConsole(serverId) {
+    try {
+        const data = await API.servers.console(serverId);
+        const el = document.getElementById('console-output');
+        if (!el) return;
+        if (data.lines.length === 0) {
+            el.innerHTML = '<span class="console-line" style="color:var(--text-muted)">No output yet. Start the server to see console output.</span>';
+        } else {
+            el.innerHTML = data.lines.map(line => {
+                let cls = '';
+                if (/\bwarn/i.test(line)) cls = 'warn';
+                else if (/\berror|exception|fatal/i.test(line)) cls = 'error';
+                else if (/\binfo/i.test(line)) cls = 'info';
+                return `<div class="console-line ${cls}">${escapeHtml(line)}</div>`;
+            }).join('');
+            el.scrollTop = el.scrollHeight;
+        }
+    } catch (e) { /* ignore */ }
+}
+
+async function sendCmd(serverId) {
+    const input = document.getElementById('console-cmd');
+    const cmd = input.value.trim();
+    if (!cmd) return;
+    input.value = '';
+    try {
+        await API.servers.command(serverId, cmd);
+    } catch (err) {
+        toast(err.message, 'error');
+    }
+}
+
+async function startServer(serverId) {
+    try {
+        const result = await API.servers.start(serverId);
+        if (result.success) {
+            toast('Server starting...', 'success');
+            navigate('server-detail', { id: serverId });
+        } else {
+            toast(result.error || 'Failed to start', 'error');
+        }
+    } catch (err) {
+        toast(err.message, 'error');
+    }
+}
+
+async function stopServer(serverId) {
+    try {
+        const result = await API.servers.stop(serverId);
+        if (result.success) {
+            toast('Server stopped', 'info');
+            navigate('server-detail', { id: serverId });
+        } else {
+            toast(result.error || 'Failed to stop', 'error');
+        }
+    } catch (err) {
+        toast(err.message, 'error');
+    }
+}
+
+// --- Settings Tab ---
+async function loadServerSettings(serverId) {
+    const content = document.getElementById('server-tab-content');
+    content.innerHTML = loading('Loading settings...');
+    try {
+        const server = await API.servers.get(serverId);
+        const javas = await API.servers.java();
+        content.innerHTML = `
+            <div class="card">
+                <h3 style="margin-bottom:16px;">Server Settings</h3>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Server Name</label>
+                        <input class="form-input" id="set-name" value="${escapeHtml(server.name)}">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Port</label>
+                        <input class="form-input" id="set-port" type="number" value="${server.port}">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Min RAM</label>
+                        <input class="form-input" id="set-minram" value="${escapeHtml(server.min_ram)}">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Max RAM</label>
+                        <input class="form-input" id="set-maxram" value="${escapeHtml(server.max_ram)}">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">JVM Arguments</label>
+                    <input class="form-input" id="set-jvm" value="${escapeHtml(server.jvm_args)}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Java Path</label>
+                    <select class="form-select" id="set-java">
+                        <option value="java" ${server.java_path === 'java' ? 'selected' : ''}>System Default (java)</option>
+                        ${javas.map(j => `<option value="${escapeHtml(j.path)}" ${server.java_path === j.path ? 'selected' : ''}>${escapeHtml(j.vendor)} ${escapeHtml(j.version)} (${j.is_64bit ? '64-bit' : '32-bit'})</option>`).join('')}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Server Jar</label>
+                    <input class="form-input" id="set-jar" value="${escapeHtml(server.server_jar)}">
+                </div>
+                <div class="form-group" style="margin-top:8px">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                        <input type="checkbox" id="set-autostart" ${server.auto_start ? 'checked' : ''}> Auto-start on panel launch
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                        <input type="checkbox" id="set-autorestart" ${server.auto_restart ? 'checked' : ''}> Auto-restart on crash
+                    </label>
+                </div>
+                <div style="display:flex;gap:8px;margin-top:20px;">
+                    <button class="btn btn-primary" onclick="saveServerSettings(${serverId})">Save Settings</button>
+                    <button class="btn btn-danger" onclick="confirmDeleteServer(${serverId})">Delete Server</button>
+                </div>
+                <p style="font-size:12px;color:var(--text-muted);margin-top:12px;">Server path: ${escapeHtml(server.path)}</p>
+            </div>
+        `;
+    } catch (err) {
+        content.innerHTML = `<div class="card">${emptyState('&#9888;', 'Error', err.message)}</div>`;
+    }
+}
+
+async function saveServerSettings(serverId) {
+    const data = {
+        name: document.getElementById('set-name').value,
+        port: parseInt(document.getElementById('set-port').value) || 25565,
+        min_ram: document.getElementById('set-minram').value,
+        max_ram: document.getElementById('set-maxram').value,
+        jvm_args: document.getElementById('set-jvm').value,
+        java_path: document.getElementById('set-java').value,
+        server_jar: document.getElementById('set-jar').value,
+        auto_start: document.getElementById('set-autostart').checked,
+        auto_restart: document.getElementById('set-autorestart').checked,
+    };
+    try {
+        await API.servers.update(serverId, data);
+        toast('Settings saved', 'success');
+    } catch (err) {
+        toast(err.message, 'error');
+    }
+}
+
+function confirmDeleteServer(serverId) {
+    showModal(`
+        <div class="modal-header"><h3>Delete Server</h3></div>
+        <div class="modal-body">
+            <p>Are you sure? This action cannot be undone.</p>
+            <div class="form-group" style="margin-top:12px">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                    <input type="checkbox" id="del-files"> Also delete server files from disk
+                </label>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModalDirect()">Cancel</button>
+            <button class="btn btn-danger" onclick="doDeleteServer(${serverId})">Delete</button>
+        </div>
+    `);
+}
+
+async function doDeleteServer(serverId) {
+    const deleteFiles = document.getElementById('del-files').checked;
+    try {
+        await API.servers.delete(serverId, deleteFiles);
+        toast('Server deleted', 'info');
+        closeModalDirect();
+        navigate('servers');
+    } catch (err) {
+        toast(err.message, 'error');
+    }
+}
+
+// --- Mods Tab ---
+async function loadServerMods(serverId) {
+    const content = document.getElementById('server-tab-content');
+    content.innerHTML = loading('Loading installed mods...');
+    try {
+        const mods = await API.mods.installed(serverId);
+        content.innerHTML = `
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Installed Mods (${mods.length})</span>
+                    <div class="btn-group">
+                        <button class="btn btn-sm btn-secondary" onclick="checkModUpdates(${serverId})">&#128260; Check Updates</button>
+                        <button class="btn btn-sm btn-primary" onclick="navigate('mods')">&#10010; Browse Mods</button>
+                    </div>
+                </div>
+                ${mods.length === 0
+                    ? emptyState('&#128295;', 'No mods installed', 'Browse and install mods from the Mods Browser.')
+                    : `<div class="table-wrap"><table>
+                        <thead><tr><th>Mod</th><th>Version</th><th>Source</th><th>Installed</th><th>Actions</th></tr></thead>
+                        <tbody>${mods.map(m => `
+                            <tr>
+                                <td><strong>${escapeHtml(m.mod_name)}</strong></td>
+                                <td>${escapeHtml(m.version_name || m.file_name)}</td>
+                                <td><span class="tag">${escapeHtml(m.source)}</span></td>
+                                <td>${timeAgo(m.installed_at)}</td>
+                                <td><button class="btn btn-sm btn-danger" onclick="uninstallMod(${serverId}, ${m.id}, '${escapeHtml(m.mod_name)}')">Uninstall</button></td>
+                            </tr>
+                        `).join('')}</tbody>
+                    </table></div>`
+                }
+            </div>
+        `;
+    } catch (err) {
+        content.innerHTML = `<div class="card">${emptyState('&#9888;', 'Error', err.message)}</div>`;
+    }
+}
+
+async function uninstallMod(serverId, modId, modName) {
+    if (!confirm(`Uninstall "${modName}"?`)) return;
+    try {
+        await API.mods.uninstall(serverId, modId);
+        toast(`Uninstalled ${modName}`, 'success');
+        loadServerMods(serverId);
+    } catch (err) {
+        toast(err.message, 'error');
+    }
+}
+
+async function checkModUpdates(serverId) {
+    toast('Checking for updates...', 'info');
+    try {
+        const updates = await API.mods.checkUpdates(serverId);
+        if (updates.length === 0) {
+            toast('All mods are up to date!', 'success');
+        } else {
+            toast(`${updates.length} update(s) available`, 'warning');
+        }
+    } catch (err) {
+        toast(err.message, 'error');
+    }
+}
+
+// --- Backups Tab ---
+async function loadServerBackups(serverId) {
+    const content = document.getElementById('server-tab-content');
+    content.innerHTML = loading('Loading backups...');
+    try {
+        const backups = await API.backups.list(serverId);
+        content.innerHTML = `
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Backups (${backups.length})</span>
+                    <div class="btn-group">
+                        <button class="btn btn-sm btn-primary" onclick="createServerBackup(${serverId}, 'full')">&#128190; Full Backup</button>
+                        <button class="btn btn-sm btn-secondary" onclick="createServerBackup(${serverId}, 'world')">&#127758; World Only</button>
+                        <button class="btn btn-sm btn-secondary" onclick="createServerBackup(${serverId}, 'mods')">&#128295; Mods Only</button>
+                    </div>
+                </div>
+                ${backups.length === 0
+                    ? emptyState('&#128190;', 'No backups yet', 'Create a backup to protect your server data.')
+                    : backups.map(b => `
+                        <div class="backup-item">
+                            <div>
+                                <strong>${escapeHtml(b.name)}</strong>
+                                <div style="font-size:12px;color:var(--text-muted)">
+                                    ${escapeHtml(b.backup_type)} &middot; ${b.size_mb} MB &middot; ${timeAgo(b.created_at)}
+                                </div>
+                            </div>
+                            <div class="btn-group">
+                                <button class="btn btn-sm btn-secondary" onclick="restoreBackup(${serverId}, ${b.id}, '${escapeHtml(b.name)}')">Restore</button>
+                                <button class="btn btn-sm btn-danger" onclick="deleteBackup(${serverId}, ${b.id})">&#128465;</button>
+                            </div>
+                        </div>
+                    `).join('')
+                }
+            </div>
+        `;
+    } catch (err) {
+        content.innerHTML = `<div class="card">${emptyState('&#9888;', 'Error', err.message)}</div>`;
+    }
+}
+
+async function createServerBackup(serverId, type) {
+    toast('Creating backup...', 'info');
+    try {
+        const result = await API.backups.create(serverId, { backup_type: type });
+        if (result.success) {
+            toast(`Backup created: ${result.size_mb} MB`, 'success');
+            loadServerBackups(serverId);
+        } else {
+            toast(result.error, 'error');
+        }
+    } catch (err) {
+        toast(err.message, 'error');
+    }
+}
+
+async function restoreBackup(serverId, backupId, name) {
+    if (!confirm(`Restore backup "${name}"? This will overwrite current files.`)) return;
+    try {
+        const result = await API.backups.restore(serverId, backupId);
+        toast(result.success ? 'Backup restored!' : result.error, result.success ? 'success' : 'error');
+    } catch (err) {
+        toast(err.message, 'error');
+    }
+}
+
+async function deleteBackup(serverId, backupId) {
+    if (!confirm('Delete this backup?')) return;
+    try {
+        await API.backups.delete(backupId);
+        toast('Backup deleted', 'info');
+        loadServerBackups(serverId);
+    } catch (err) {
+        toast(err.message, 'error');
+    }
+}

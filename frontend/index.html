@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCServerPanel</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="app-layout">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">&#9878;</div>
+                <div>
+                    <h1>MCServerPanel</h1>
+                    <div class="version">v1.0.0</div>
+                </div>
+            </div>
+            <nav class="sidebar-nav">
+                <div class="nav-section">
+                    <div class="nav-section-title">Overview</div>
+                    <a class="nav-item active" data-page="dashboard" onclick="navigate('dashboard')">
+                        <span class="icon">&#9632;</span> Dashboard
+                    </a>
+                </div>
+                <div class="nav-section">
+                    <div class="nav-section-title">Servers</div>
+                    <a class="nav-item" data-page="servers" onclick="navigate('servers')">
+                        <span class="icon">&#9881;</span> My Servers
+                    </a>
+                    <a class="nav-item" data-page="create-server" onclick="navigate('create-server')">
+                        <span class="icon">&#10010;</span> Create Server
+                    </a>
+                </div>
+                <div class="nav-section">
+                    <div class="nav-section-title">Content</div>
+                    <a class="nav-item" data-page="modpacks" onclick="navigate('modpacks')">
+                        <span class="icon">&#128230;</span> Modpacks
+                    </a>
+                    <a class="nav-item" data-page="mods" onclick="navigate('mods')">
+                        <span class="icon">&#128295;</span> Mods Browser
+                    </a>
+                </div>
+                <div class="nav-section">
+                    <div class="nav-section-title">Tools</div>
+                    <a class="nav-item" data-page="backups" onclick="navigate('backups')">
+                        <span class="icon">&#128190;</span> Backups
+                    </a>
+                    <a class="nav-item" data-page="settings" onclick="navigate('settings')">
+                        <span class="icon">&#9881;</span> Settings
+                    </a>
+                </div>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content" id="main-content">
+            <!-- Pages rendered here by JS -->
+        </main>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Modal container -->
+    <div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
+        <div class="modal" id="modal-content" onclick="event.stopPropagation()"></div>
+    </div>
+
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/utils.js"></script>
+    <script src="/static/js/pages/dashboard.js"></script>
+    <script src="/static/js/pages/servers.js"></script>
+    <script src="/static/js/pages/server-detail.js"></script>
+    <script src="/static/js/pages/create-server.js"></script>
+    <script src="/static/js/pages/modpacks.js"></script>
+    <script src="/static/js/pages/mods.js"></script>
+    <script src="/static/js/pages/backups.js"></script>
+    <script src="/static/js/pages/settings.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
