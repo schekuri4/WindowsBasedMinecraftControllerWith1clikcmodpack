@@ -99,9 +99,20 @@ const API = {
             const q = new URLSearchParams(params).toString();
             return API.get(`/plugins/search/modrinth?${q}`);
         },
+        searchHangar: (params) => {
+            const q = new URLSearchParams(params).toString();
+            return API.get(`/plugins/search/hangar?${q}`);
+        },
+        searchSpiget: (params) => {
+            const q = new URLSearchParams(params).toString();
+            return API.get(`/plugins/search/spiget?${q}`);
+        },
         versions: (id, params = {}) => {
             const q = new URLSearchParams(params).toString();
-            return API.get(`/plugins/versions/modrinth/${id}?${q}`);
+            const source = params.source || 'modrinth';
+            const actualParams = new URLSearchParams(params);
+            actualParams.delete('source');
+            return API.get(`/plugins/versions/${source}/${id}?${actualParams.toString()}`);
         },
         install: (serverId, data) => API.post(`/plugins/install/${serverId}`, data),
     },

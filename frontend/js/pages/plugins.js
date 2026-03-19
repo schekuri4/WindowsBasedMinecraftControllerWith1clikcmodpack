@@ -2,6 +2,7 @@
  * Plugin Browser Page
  */
 let pluginState = {
+    source: 'modrinth',
     query: '',
     mcVersion: '',
     loader: '',
@@ -18,15 +19,22 @@ async function renderPlugins() {
         <div class="page-header">
             <div>
                 <h2>Plugin Browser</h2>
-                <div class="subtitle">Browse and install server plugins from Modrinth</div>
+                <div class="subtitle">Browse and install server plugins from Modrinth, Hangar, and Spiget</div>
             </div>
         </div>
 
         <div class="card" style="margin-bottom:20px">
-            <div class="form-row" style="grid-template-columns: 1fr 150px 150px auto;">
+            <div class="form-row" style="grid-template-columns: 1fr 150px 150px 150px auto;">
                 <div class="form-group" style="margin:0">
                     <input class="form-input" id="plugin-search" placeholder="Search plugins..." value="${escapeHtml(pluginState.query)}"
                         onkeydown="if(event.key==='Enter')searchPlugins()">
+                </div>
+                <div class="form-group" style="margin:0">
+                    <select class="form-select" id="plugin-source" onchange="pluginState.source=this.value; searchPlugins()">
+                        <option value="modrinth">Modrinth</option>
+                        <option value="hangar">Hangar</option>
+                        <option value="spiget">Spiget</option>
+                    </select>
                 </div>
                 <div class="form-group" style="margin:0">
                     <input class="form-input" id="plugin-version" placeholder="MC Version" value="${escapeHtml(pluginState.mcVersion)}">
@@ -58,7 +66,9 @@ async function renderPlugins() {
         </div>
     `;
 
+    const sourceEl = document.getElementById('plugin-source');
     const loaderEl = document.getElementById('plugin-loader');
+    if (sourceEl) sourceEl.value = pluginState.source || 'modrinth';
     if (loaderEl) loaderEl.value = pluginState.loader || '';
 
     await searchPlugins();
@@ -66,6 +76,7 @@ async function renderPlugins() {
 
 async function searchPlugins() {
     pluginState.query = document.getElementById('plugin-search').value;
+    pluginState.source = document.getElementById('plugin-source')?.value || 'modrinth';
     pluginState.mcVersion = document.getElementById('plugin-version').value;
     pluginState.loader = document.getElementById('plugin-loader')?.value || '';
     pluginState.offset = 0;
@@ -74,13 +85,21 @@ async function searchPlugins() {
     results.innerHTML = loading('Searching plugins...');
 
     try {
-        const data = await API.plugins.searchModrinth({
+        let data;
+        const params = {
             query: pluginState.query,
             mc_version: pluginState.mcVersion,
             loader: pluginState.loader,
             offset: pluginState.offset,
             limit: 20,
-        });
+        };
+        if (pluginState.source === 'hangar') {
+            data = await API.plugins.searchHangar(params);
+        } else if (pluginState.source === 'spiget') {
+            data = await API.plugins.searchSpiget(params);
+        } else {
+            data = await API.plugins.searchModrinth(params);
+        }
 
         if (data.results.length === 0) {
             results.innerHTML = emptyState('&#128270;', 'No plugins found', 'Try different search terms.');
@@ -113,13 +132,13 @@ function pluginCard(p) {
                 </div>
             </div>
             <div class="mod-card-actions">
-                <button class="btn btn-primary btn-sm" onclick="showPluginInstall('${p.id}', '${encodedName}')">Install</button>
+                <button class="btn btn-primary btn-sm" onclick="showPluginInstall('${p.id}', '${encodedName}', '${p.source}')">Install</button>
             </div>
         </div>
     `;
 }
 
-async function showPluginInstall(projectId, encodedName) {
+async function showPluginInstall(projectId, encodedName, source) {
     const name = decodeURIComponent(encodedName || '');
     const serverSelect = document.getElementById('plugin-target-server');
     if (!serverSelect) {
@@ -135,6 +154,7 @@ async function showPluginInstall(projectId, encodedName) {
 
     try {
         const versions = await API.plugins.versions(projectId, {
+            source,
             mc_version: document.getElementById('plugin-version')?.value || '',
             loader: document.getElementById('plugin-loader')?.value || '',
         });
@@ -152,7 +172,7 @@ async function showPluginInstall(projectId, encodedName) {
                     ${versions.slice(0, 30).map(v => `<option value="${v.id}">${escapeHtml(v.name)} (MC ${v.game_versions.slice(0, 3).join(', ')})</option>`).join('')}
                 </select>
             </div>
-            <button class="btn btn-success" id="plugin-install-btn" onclick="doInstallPlugin(${serverId}, '${projectId}')">
+            <button class="btn btn-success" id="plugin-install-btn" onclick="doInstallPlugin(${serverId}, '${projectId}', '${source}')">
                 &#9889; Install Plugin
             </button>
         `;
@@ -161,7 +181,7 @@ async function showPluginInstall(projectId, encodedName) {
     }
 }
 
-async function doInstallPlugin(serverId, projectId) {
+async function doInstallPlugin(serverId, projectId, source) {
     const versionId = document.getElementById('plugin-install-version').value;
     const btn = document.getElementById('plugin-install-btn');
     btn.disabled = true;
@@ -169,7 +189,7 @@ async function doInstallPlugin(serverId, projectId) {
 
     try {
         const result = await API.plugins.install(serverId, {
-            source: 'modrinth',
+            source,
             project_id: projectId,
             version_id: versionId,
         });
