@@ -491,6 +491,49 @@ class ModInstaller:
         ]
 
     @staticmethod
+    def list_mod_files_on_disk(db: Session, server_id: int) -> list[dict]:
+        """List jar/zip files in the server's mods/ folder."""
+        server = db.query(Server).filter(Server.id == server_id).first()
+        if not server:
+            return []
+        mods_dir = Path(server.path) / "mods"
+        if not mods_dir.exists():
+            return []
+
+        # Get DB-tracked file names for cross-reference
+        tracked = {
+            m.file_name
+            for m in db.query(InstalledMod).filter(InstalledMod.server_id == server_id).all()
+        }
+
+        files = []
+        for f in sorted(mods_dir.iterdir()):
+            if f.suffix.lower() in (".jar", ".zip") and f.is_file():
+                size_kb = f.stat().st_size / 1024
+                files.append({
+                    "file_name": f.name,
+                    "size_kb": round(size_kb, 1),
+                    "tracked": f.name in tracked,
+                })
+        return files
+
+    @staticmethod
+    def delete_mod_file_from_disk(db: Session, server_id: int, file_name: str) -> dict:
+        """Delete a mod file from the server's mods/ folder."""
+        server = db.query(Server).filter(Server.id == server_id).first()
+        if not server:
+            return {"success": False, "error": "Server not found"}
+        # Sanitize: prevent path traversal
+        safe_name = Path(file_name).name
+        if safe_name != file_name or ".." in file_name:
+            return {"success": False, "error": "Invalid file name"}
+        mod_path = Path(server.path) / "mods" / safe_name
+        if not mod_path.exists():
+            return {"success": False, "error": "File not found"}
+        mod_path.unlink()
+        return {"success": True, "message": f"Deleted {safe_name}"}
+
+    @staticmethod
     async def get_modrinth_categories() -> list[dict]:
         """Get available mod categories from Modrinth."""
         async with httpx.AsyncClient(timeout=15) as client:

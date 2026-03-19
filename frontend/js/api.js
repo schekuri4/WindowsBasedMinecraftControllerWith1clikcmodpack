@@ -91,9 +91,11 @@ const API = {
         },
         categories: () => API.get('/mods/categories/modrinth'),
         installed: (serverId) => API.get(`/mods/installed/${serverId}`),
+        files: (serverId) => API.get(`/mods/files/${serverId}`),
         install: (serverId, data) => API.post(`/mods/install/${serverId}`, data),
         batchInstall: (serverId, mods) => API.post(`/mods/install-batch/${serverId}`, { mods }),
         uninstall: (serverId, modId) => API.del(`/mods/uninstall/${serverId}/${modId}`),
+        deleteFile: (serverId, encodedFileName) => API.del(`/mods/file/${serverId}/${encodedFileName}`),
         checkUpdates: (serverId) => API.get(`/mods/updates/${serverId}`),
     },
 

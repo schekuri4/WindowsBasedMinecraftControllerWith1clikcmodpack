@@ -279,6 +279,20 @@ class ServerManager:
             except Exception:
                 pass
 
+        # Check if port is already in use
+        import socket
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(1)
+                if s.connect_ex(('127.0.0.1', server.port)) == 0:
+                    return {
+                        "success": False,
+                        "error": f"Port {server.port} is already in use. "
+                                 f"Stop the other server or change this server's port in Settings."
+                    }
+        except Exception:
+            pass
+
         java_executable = server.java_path or "java"
         if java_executable == "java" or not Path(java_executable).exists():
             detected_java = JavaManager.get_best_java_path(server.minecraft_version)

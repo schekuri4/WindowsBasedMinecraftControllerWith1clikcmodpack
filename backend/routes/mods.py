@@ -68,6 +68,12 @@ def list_installed(server_id: int, db: Session = Depends(get_db)):
     return ModInstaller.list_installed_mods(db, server_id)
 
 
+@router.get("/files/{server_id}")
+def list_mod_files(server_id: int, db: Session = Depends(get_db)):
+    """List actual mod jar files on disk for this server."""
+    return ModInstaller.list_mod_files_on_disk(db, server_id)
+
+
 @router.post("/install/{server_id}")
 async def install_mod(
     server_id: int,
@@ -85,6 +91,12 @@ async def batch_install(
 ):
     mods = [m.model_dump() for m in data.mods]
     return await ModInstaller.batch_install_mods(db, server_id, mods)
+
+
+@router.delete("/file/{server_id}/{file_name}")
+def delete_mod_file(server_id: int, file_name: str, db: Session = Depends(get_db)):
+    """Delete a mod file from disk by filename."""
+    return ModInstaller.delete_mod_file_from_disk(db, server_id, file_name)
 
 
 @router.delete("/uninstall/{server_id}/{mod_id}")

@@ -330,39 +330,54 @@ async function doDeleteServer(serverId) {
     }
 }
 
+// All server types that support mods (used for compatibility filtering)
+const MOD_LOADER_TYPES = ['forge', 'neoforge', 'fabric', 'quilt', 'liteloader', 'rift'];
+
+function getServerLoader(serverType) {
+    return MOD_LOADER_TYPES.includes(serverType) ? serverType : '';
+}
+
 // --- Mods Tab ---
 async function loadServerMods(serverId) {
     const content = document.getElementById('server-tab-content');
     content.innerHTML = loading('Loading installed mods...');
     try {
-        const [server, mods] = await Promise.all([
+        const [server, mods, modFiles] = await Promise.all([
             API.servers.get(serverId),
             API.mods.installed(serverId),
+            API.mods.files(serverId).catch(() => []),
         ]);
-        const contentLoader = (server.server_type === 'forge' || server.server_type === 'fabric') ? server.server_type : '';
+        const contentLoader = getServerLoader(server.server_type);
+        const trackedNames = new Set(mods.map(m => m.file_name));
+        const untrackedFiles = modFiles.filter(f => !f.tracked);
 
         content.innerHTML = `
             <div class="card">
                 <div class="card-header">
-                    <span class="card-title">Installed Mods (${mods.length})</span>
+                    <span class="card-title">Installed Mods (${modFiles.length} files${mods.length ? `, ${mods.length} tracked` : ''})</span>
                     <div class="btn-group">
                         <button class="btn btn-sm btn-secondary" onclick="checkModUpdates(${serverId})">&#128260; Check Updates</button>
                         <button class="btn btn-sm btn-primary" onclick="navigate('mods')">&#10010; Browse Mods</button>
                     </div>
                 </div>
-                ${mods.length === 0
-                    ? emptyState('&#128295;', 'No mods installed', 'Browse and install mods from the Mods Browser.')
+                ${modFiles.length === 0
+                    ? emptyState('&#128295;', 'No mods installed', 'Browse and install mods from the Mods Browser, or install a modpack.')
                     : `<div class="table-wrap"><table>
-                        <thead><tr><th>Mod</th><th>Version</th><th>Source</th><th>Installed</th><th>Actions</th></tr></thead>
-                        <tbody>${mods.map(m => `
-                            <tr>
-                                <td><strong>${escapeHtml(m.mod_name)}</strong></td>
-                                <td>${escapeHtml(m.version_name || m.file_name)}</td>
-                                <td><span class="tag">${escapeHtml(m.source)}</span></td>
-                                <td>${timeAgo(m.installed_at)}</td>
-                                <td><button class="btn btn-sm btn-danger" onclick="uninstallMod(${serverId}, ${m.id}, '${escapeHtml(m.mod_name)}')">Uninstall</button></td>
-                            </tr>
-                        `).join('')}</tbody>
+                        <thead><tr><th>File Name</th><th>Size</th><th>Source</th><th>Actions</th></tr></thead>
+                        <tbody>${modFiles.map(f => {
+                            const dbMod = mods.find(m => m.file_name === f.file_name);
+                            return `<tr>
+                                <td><strong>${escapeHtml(dbMod ? dbMod.mod_name : f.file_name.replace(/\.jar$/, ''))}</strong>
+                                    <div style="font-size:11px;color:var(--text-muted)">${escapeHtml(f.file_name)}</div>
+                                </td>
+                                <td>${f.size_kb > 1024 ? (f.size_kb/1024).toFixed(1)+' MB' : f.size_kb+' KB'}</td>
+                                <td>${dbMod ? `<span class="tag">${escapeHtml(dbMod.source)}</span>` : '<span class="tag" style="opacity:0.5">modpack</span>'}</td>
+                                <td>${dbMod
+                                    ? `<button class="btn btn-sm btn-danger" onclick="uninstallMod(${serverId}, ${dbMod.id}, '${escapeHtml(dbMod.mod_name)}')">Uninstall</button>`
+                                    : `<button class="btn btn-sm btn-danger" onclick="deleteModFile(${serverId}, '${encodeURIComponent(f.file_name)}')">Delete</button>`
+                                }</td>
+                            </tr>`;
+                        }).join('')}</tbody>
                     </table></div>`
                 }
             </div>
@@ -411,6 +426,18 @@ async function uninstallMod(serverId, modId, modName) {
     }
 }
 
+async function deleteModFile(serverId, encodedFileName) {
+    const fileName = decodeURIComponent(encodedFileName);
+    if (!confirm(`Delete "${fileName}" from mods folder?`)) return;
+    try {
+        await API.mods.deleteFile(serverId, encodedFileName);
+        toast(`Deleted ${fileName}`, 'success');
+        loadServerMods(serverId);
+    } catch (err) {
+        toast(err.message, 'error');
+    }
+}
+
 async function checkModUpdates(serverId) {
     toast('Checking for updates...', 'info');
     try {
@@ -433,7 +460,7 @@ async function searchServerCompatibleMods(serverId) {
     try {
         const [server] = await Promise.all([API.servers.get(serverId)]);
         const query = document.getElementById('srv-mod-search')?.value || '';
-        const loader = (server.server_type === 'forge' || server.server_type === 'fabric') ? server.server_type : '';
+        const loader = getServerLoader(server.server_type);
         const data = await API.mods.searchModrinth({
             query,
             mc_version: server.minecraft_version || '',
@@ -477,7 +504,7 @@ async function installServerCompatibleMod(serverId, projectId, encodedName) {
     toast(`Installing ${modName}...`, 'info');
     try {
         const server = await API.servers.get(serverId);
-        const loader = (server.server_type === 'forge' || server.server_type === 'fabric') ? server.server_type : '';
+        const loader = getServerLoader(server.server_type);
         const versions = await API.mods.versions(projectId, {
             mc_version: server.minecraft_version || '',
             loader,
@@ -510,7 +537,7 @@ async function searchServerCompatibleModpacks(serverId) {
     try {
         const server = await API.servers.get(serverId);
         const query = document.getElementById('srv-modpack-search')?.value || '';
-        const loader = (server.server_type === 'forge' || server.server_type === 'fabric') ? server.server_type : '';
+        const loader = getServerLoader(server.server_type);
         const data = await API.modpacks.searchModrinth({
             query,
             mc_version: server.minecraft_version || '',
@@ -554,7 +581,7 @@ async function installServerCompatibleModpack(serverId, projectId, encodedName) 
     toast(`Installing ${packName}...`, 'info');
     try {
         const server = await API.servers.get(serverId);
-        const loader = (server.server_type === 'forge' || server.server_type === 'fabric') ? server.server_type : '';
+        const loader = getServerLoader(server.server_type);
         const versions = await API.modpacks.versions(projectId, {
             mc_version: server.minecraft_version || '',
             loader,
