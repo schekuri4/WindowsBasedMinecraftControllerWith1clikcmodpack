@@ -42,6 +42,9 @@ async def auth_middleware(request: Request, call_next):
     if path.startswith("/api") and path not in allowed_paths:
         auth_header = request.headers.get("Authorization", "")
         token = auth_header.replace("Bearer ", "", 1).strip() if auth_header.startswith("Bearer ") else ""
+        # Also accept token as query param (for file downloads via browser navigation)
+        if not token:
+            token = request.query_params.get("token", "")
         if token not in VALID_TOKENS:
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
 

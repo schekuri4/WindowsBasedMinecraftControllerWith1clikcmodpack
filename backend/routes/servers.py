@@ -1,7 +1,9 @@
 """
 MCServerPanel - Server API Routes
 """
-from fastapi import APIRouter, Depends, HTTPException
+from pathlib import Path, PurePosixPath
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi.responses import FileResponse as FastAPIFileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -221,3 +223,116 @@ def get_console(server_id: int, lines: int = 100):
 @router.get("/{server_id}/status")
 def get_server_status(server_id: int, db: Session = Depends(get_db)):
     return ServerManager.get_server_status(db, server_id)
+
+
+# --- File Manager ---
+
+def _resolve_server_path(db: Session, server_id: int, sub_path: str = "") -> tuple:
+    """Resolve and validate a path inside the server directory. Returns (server, resolved_path)."""
+    server = ServerManager.get_server(db, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    server_root = Path(server.path).resolve()
+    # Normalise using PurePosixPath to handle forward-slash subpaths from the frontend
+    clean = PurePosixPath(sub_path).as_posix() if sub_path else ""
+    target = (server_root / clean).resolve()
+    # Prevent path traversal
+    if not str(target).startswith(str(server_root)):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    return server, target
+
+
+@router.get("/{server_id}/files")
+def list_files(server_id: int, path: str = "", db: Session = Depends(get_db)):
+    """List files and directories inside the server folder."""
+    _, target = _resolve_server_path(db, server_id, path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Directory not found")
+    if not target.is_dir():
+        raise HTTPException(status_code=400, detail="Not a directory")
+
+    items = []
+    try:
+        for entry in sorted(target.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())):
+            try:
+                stat = entry.stat()
+                items.append({
+                    "name": entry.name,
+                    "is_dir": entry.is_dir(),
+                    "size": stat.st_size if entry.is_file() else 0,
+                    "modified": stat.st_mtime,
+                })
+            except (PermissionError, OSError):
+                continue
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Permission denied")
+    return {"path": path or "", "items": items}
+
+
+@router.get("/{server_id}/files/download")
+def download_file(server_id: int, path: str, db: Session = Depends(get_db)):
+    """Download a single file from the server directory."""
+    _, target = _resolve_server_path(db, server_id, path)
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FastAPIFileResponse(str(target), filename=target.name)
+
+
+@router.post("/{server_id}/files/upload")
+async def upload_files(
+    server_id: int,
+    path: str = Form(""),
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+):
+    """Upload one or more files. Paths in filenames (e.g. sub/dir/file.txt) create directories."""
+    _, base = _resolve_server_path(db, server_id, path)
+    base.mkdir(parents=True, exist_ok=True)
+
+    results = []
+    for f in files:
+        # Support relative paths in filename for folder uploads
+        clean_name = PurePosixPath(f.filename).as_posix() if f.filename else "unnamed"
+        # Prevent traversal in uploaded filenames
+        if ".." in clean_name.split("/"):
+            results.append({"name": f.filename, "error": "Invalid path"})
+            continue
+        dest = (base / clean_name).resolve()
+        if not str(dest).startswith(str(base.resolve())):
+            results.append({"name": f.filename, "error": "Invalid path"})
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        content = await f.read()
+        dest.write_bytes(content)
+        results.append({"name": clean_name, "size": len(content)})
+    return {"success": True, "uploaded": results}
+
+
+@router.post("/{server_id}/files/mkdir")
+def create_directory(server_id: int, path: str = "", name: str = "", db: Session = Depends(get_db)):
+    """Create a new directory inside the server folder."""
+    if not name:
+        raise HTTPException(status_code=400, detail="Name required")
+    _, base = _resolve_server_path(db, server_id, path)
+    new_dir = (base / name).resolve()
+    if not str(new_dir).startswith(str(base.resolve().parent)):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    new_dir.mkdir(parents=True, exist_ok=True)
+    return {"success": True}
+
+
+@router.delete("/{server_id}/files")
+def delete_path(server_id: int, path: str, db: Session = Depends(get_db)):
+    """Delete a file or directory from the server folder."""
+    _, target = _resolve_server_path(db, server_id, path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Not found")
+    server_root = Path(ServerManager.get_server(db, server_id).path).resolve()
+    if target == server_root:
+        raise HTTPException(status_code=400, detail="Cannot delete server root")
+    import shutil
+    if target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink()
+    return {"success": True}

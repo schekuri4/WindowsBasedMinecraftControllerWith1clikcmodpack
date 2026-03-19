@@ -47,6 +47,24 @@ const API = {
         status: (id) => API.get(`/servers/${id}/status`),
         versions: () => API.get('/servers/versions'),
         java: () => API.get('/servers/java'),
+        files: (id, path = '') => API.get(`/servers/${id}/files?path=${encodeURIComponent(path)}`),
+        filesDownload: (id, path) => {
+            const token = localStorage.getItem('mcsp_token');
+            return `${API.base}/servers/${id}/files/download?path=${encodeURIComponent(path)}&token=${token}`;
+        },
+        filesUpload: async (id, path, formData) => {
+            formData.append('path', path);
+            const token = localStorage.getItem('mcsp_token');
+            const resp = await fetch(`${API.base}/servers/${id}/files/upload`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` },
+                body: formData,
+            });
+            if (!resp.ok) throw new Error((await resp.json()).detail || resp.statusText);
+            return resp.json();
+        },
+        filesMkdir: (id, path, name) => API.post(`/servers/${id}/files/mkdir?path=${encodeURIComponent(path)}&name=${encodeURIComponent(name)}`),
+        filesDelete: (id, path) => API.del(`/servers/${id}/files?path=${encodeURIComponent(path)}`),
     },
 
     // Modpacks

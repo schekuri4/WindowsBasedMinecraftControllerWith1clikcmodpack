@@ -95,6 +95,7 @@ async function renderServerDetail(params) {
             <div class="tabs">
                 <div class="tab active" onclick="switchServerTab('console', ${server.id})">Console</div>
                 <div class="tab" onclick="switchServerTab('settings', ${server.id})">Settings</div>
+                <div class="tab" onclick="switchServerTab('files', ${server.id})">Files</div>
                 <div class="tab" onclick="switchServerTab('mods', ${server.id})">Mods</div>
                 <div class="tab" onclick="switchServerTab('srv-backups', ${server.id})">Backups</div>
             </div>
@@ -120,7 +121,7 @@ function switchServerTab(tab, serverId) {
     // Simpler approach: activate by index
     const tabs = document.querySelectorAll('.tabs .tab');
     tabs.forEach(t => t.classList.remove('active'));
-    const tabIndex = { console: 0, settings: 1, mods: 2, 'srv-backups': 3 }[tab];
+    const tabIndex = { console: 0, settings: 1, files: 2, mods: 3, 'srv-backups': 4 }[tab];
     if (tabs[tabIndex]) tabs[tabIndex].classList.add('active');
 
     const content = document.getElementById('server-tab-content');
@@ -131,6 +132,8 @@ function switchServerTab(tab, serverId) {
         startConsolePolling(serverId);
     } else if (tab === 'settings') {
         loadServerSettings(serverId);
+    } else if (tab === 'files') {
+        loadServerFiles(serverId);
     } else if (tab === 'mods') {
         loadServerMods(serverId);
     } else if (tab === 'srv-backups') {
@@ -724,6 +727,149 @@ async function deleteBackup(serverId, backupId) {
         await API.backups.delete(backupId);
         toast('Backup deleted', 'info');
         loadServerBackups(serverId);
+    } catch (err) {
+        toast(err.message, 'error');
+    }
+}
+
+// --- Files Tab ---
+let currentFilePath = '';
+
+function formatFileSize(bytes) {
+    if (bytes === 0) return '—';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+function fileIcon(name, isDir) {
+    if (isDir) return '&#128193;';
+    const ext = name.split('.').pop().toLowerCase();
+    const icons = {
+        jar: '&#9749;', zip: '&#128230;', gz: '&#128230;', tar: '&#128230;',
+        json: '&#128196;', yml: '&#128196;', yaml: '&#128196;', toml: '&#128196;',
+        properties: '&#9881;', txt: '&#128196;', log: '&#128220;', cfg: '&#9881;',
+        dat: '&#128190;', dat_old: '&#128190;', mca: '&#127758;',
+        png: '&#128248;', jpg: '&#128248;', gif: '&#128248;',
+    };
+    return icons[ext] || '&#128196;';
+}
+
+function buildBreadcrumb(serverId, path) {
+    const parts = path ? path.split('/').filter(Boolean) : [];
+    let crumbs = `<span class="fm-crumb" onclick="browseFiles(${serverId}, '')">/</span>`;
+    let accumulated = '';
+    for (const part of parts) {
+        accumulated += (accumulated ? '/' : '') + part;
+        const p = accumulated;
+        crumbs += ` <span style="color:var(--text-muted);">/</span> <span class="fm-crumb" onclick="browseFiles(${serverId}, '${escapeHtml(p)}')">${escapeHtml(part)}</span>`;
+    }
+    return crumbs;
+}
+
+async function loadServerFiles(serverId, path = '') {
+    currentFilePath = path;
+    const content = document.getElementById('server-tab-content');
+    content.innerHTML = loading('Loading files...');
+    try {
+        const data = await API.servers.files(serverId, path);
+        content.innerHTML = `
+            <div class="card" style="padding:0;overflow:hidden;">
+                <div class="fm-toolbar">
+                    <div class="fm-breadcrumb">${buildBreadcrumb(serverId, path)}</div>
+                    <div class="fm-actions">
+                        <button class="btn btn-sm btn-secondary" onclick="fmNewFolder(${serverId})" title="New Folder">&#128193;+ New Folder</button>
+                        <label class="btn btn-sm btn-primary" title="Upload Files" style="margin:0;cursor:pointer;">
+                            &#128194; Upload Files
+                            <input type="file" multiple style="display:none" onchange="fmUploadFiles(${serverId}, this.files)">
+                        </label>
+                        <label class="btn btn-sm btn-success" title="Upload Folder" style="margin:0;cursor:pointer;">
+                            &#128193; Upload Folder
+                            <input type="file" webkitdirectory style="display:none" onchange="fmUploadFiles(${serverId}, this.files)">
+                        </label>
+                    </div>
+                </div>
+                <div class="fm-list">
+                    ${path ? `<div class="fm-item fm-item-dir" onclick="browseFiles(${serverId}, '${escapeHtml(parentPath(path))}')">
+                        <span class="fm-icon">&#128194;</span>
+                        <span class="fm-name">..</span>
+                        <span class="fm-size"></span>
+                        <span class="fm-actions-cell"></span>
+                    </div>` : ''}
+                    ${data.items.length === 0 && !path ? '<div class="fm-empty">This server has no files yet.</div>' : ''}
+                    ${data.items.map(item => {
+                        const itemPath = path ? path + '/' + item.name : item.name;
+                        return `<div class="fm-item ${item.is_dir ? 'fm-item-dir' : ''}" ${item.is_dir ? `onclick="browseFiles(${serverId}, '${escapeHtml(itemPath)}')"` : ''}>
+                            <span class="fm-icon">${fileIcon(item.name, item.is_dir)}</span>
+                            <span class="fm-name">${escapeHtml(item.name)}</span>
+                            <span class="fm-size">${formatFileSize(item.size)}</span>
+                            <span class="fm-actions-cell">
+                                ${!item.is_dir ? `<a class="btn btn-sm btn-secondary" href="${API.servers.filesDownload(serverId, itemPath)}" title="Download">&#11015;</a>` : ''}
+                                <button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); fmDelete(${serverId}, '${escapeHtml(itemPath)}', ${item.is_dir})" title="Delete">&#128465;</button>
+                            </span>
+                        </div>`;
+                    }).join('')}
+                </div>
+            </div>
+
+            <div class="fm-drop-zone" id="fm-drop-zone"
+                ondragover="event.preventDefault(); this.classList.add('active')"
+                ondragleave="this.classList.remove('active')"
+                ondrop="event.preventDefault(); this.classList.remove('active'); fmUploadFiles(${serverId}, event.dataTransfer.files)">
+                &#128194; Drag &amp; drop files or folders here to upload
+            </div>
+        `;
+    } catch (err) {
+        content.innerHTML = `<div class="card">${emptyState('&#9888;', 'Error loading files', err.message)}</div>`;
+    }
+}
+
+function browseFiles(serverId, path) {
+    loadServerFiles(serverId, path);
+}
+
+function parentPath(path) {
+    const parts = path.split('/').filter(Boolean);
+    parts.pop();
+    return parts.join('/');
+}
+
+async function fmUploadFiles(serverId, fileList) {
+    if (!fileList || fileList.length === 0) return;
+    const formData = new FormData();
+    for (const f of fileList) {
+        // For folder uploads, webkitRelativePath preserves structure
+        const name = f.webkitRelativePath || f.name;
+        formData.append('files', f, name);
+    }
+    toast(`Uploading ${fileList.length} file(s)...`, 'info');
+    try {
+        await API.servers.filesUpload(serverId, currentFilePath, formData);
+        toast(`Uploaded ${fileList.length} file(s)`, 'success');
+        loadServerFiles(serverId, currentFilePath);
+    } catch (err) {
+        toast(err.message, 'error');
+    }
+}
+
+function fmNewFolder(serverId) {
+    const name = prompt('New folder name:');
+    if (!name) return;
+    API.servers.filesMkdir(serverId, currentFilePath, name).then(() => {
+        toast(`Created folder "${name}"`, 'success');
+        loadServerFiles(serverId, currentFilePath);
+    }).catch(err => toast(err.message, 'error'));
+}
+
+async function fmDelete(serverId, path, isDir) {
+    const label = isDir ? 'folder' : 'file';
+    const name = path.split('/').pop();
+    if (!confirm(`Delete ${label} "${name}"?${isDir ? ' This will delete all contents inside.' : ''}`)) return;
+    try {
+        await API.servers.filesDelete(serverId, path);
+        toast(`Deleted ${name}`, 'info');
+        loadServerFiles(serverId, currentFilePath);
     } catch (err) {
         toast(err.message, 'error');
     }
