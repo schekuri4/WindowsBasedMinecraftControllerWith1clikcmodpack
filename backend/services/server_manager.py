@@ -533,6 +533,13 @@ class ServerManager:
             except Exception:
                 pass
 
+        active_pid = None
+        if is_running:
+            if server_id in ServerManager._processes:
+                active_pid = ServerManager._processes[server_id].pid
+            else:
+                active_pid = server.pid
+
         return {
             "id": server.id,
             "name": server.name,
@@ -540,7 +547,7 @@ class ServerManager:
             "server_type": server.server_type,
             "minecraft_version": server.minecraft_version,
             "port": server.port,
-            "pid": proc.pid if is_running else None,
+            "pid": active_pid,
             "cpu_percent": round(cpu, 1),
             "memory_mb": round(memory_mb, 1),
             "disk_mb": round(dir_size_mb, 1),
