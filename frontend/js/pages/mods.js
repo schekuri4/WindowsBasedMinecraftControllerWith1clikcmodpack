@@ -69,9 +69,18 @@ async function renderMods() {
         ` : ''}
 
         <div id="mod-results">
-            ${emptyState('&#128295;', 'Search for mods', 'Type a query and click Search.')}
+            ${loading('Loading mods...')}
         </div>
     `;
+
+    // Preserve filter selections across re-renders.
+    const sourceEl = document.getElementById('mod-source');
+    const loaderEl = document.getElementById('mod-loader');
+    if (sourceEl) sourceEl.value = modState.source || 'modrinth';
+    if (loaderEl) loaderEl.value = modState.loader || '';
+
+    // Populate with initial results so users do not need to search first.
+    await searchMods();
 }
 
 async function searchMods() {
@@ -122,6 +131,7 @@ async function searchMods() {
 
 function modCard(m) {
     const queued = modState.queue.some(q => q.project_id === m.id);
+    const encodedName = encodeURIComponent(m.name || '');
     return `
         <div class="mod-card" id="mod-card-${m.id}">
             <img class="mod-icon" src="${m.icon_url || ''}" alt="" onerror="this.style.display='none'">
@@ -135,8 +145,8 @@ function modCard(m) {
                 </div>
             </div>
             <div class="mod-card-actions">
-                <button class="btn btn-primary btn-sm" onclick="showModInstall('${m.id}', '${escapeHtml(m.name)}', '${m.source}')">Install</button>
-                <button class="btn btn-sm ${queued ? 'btn-warning' : 'btn-secondary'}" onclick="toggleModQueue('${m.id}', '${escapeHtml(m.name)}', '${m.source}')" id="queue-btn-${m.id}">
+                <button class="btn btn-primary btn-sm" onclick="showModInstall('${m.id}', '${encodedName}', '${m.source}')">Install</button>
+                <button class="btn btn-sm ${queued ? 'btn-warning' : 'btn-secondary'}" onclick="toggleModQueue('${m.id}', '${encodedName}', '${m.source}')" id="queue-btn-${m.id}">
                     ${queued ? '&#10004; Queued' : '+ Queue'}
                 </button>
             </div>
@@ -144,7 +154,8 @@ function modCard(m) {
     `;
 }
 
-async function showModInstall(projectId, name, source) {
+async function showModInstall(projectId, encodedName, source) {
+    const name = decodeURIComponent(encodedName || '');
     const serverSelect = document.getElementById('mod-target-server');
     if (!serverSelect) {
         toast('Create a server first', 'warning');
@@ -219,7 +230,8 @@ async function doInstallMod(serverId, source, projectId) {
 }
 
 // --- Queue system ---
-async function toggleModQueue(projectId, name, source) {
+async function toggleModQueue(projectId, encodedName, source) {
+    const name = decodeURIComponent(encodedName || '');
     const idx = modState.queue.findIndex(q => q.project_id === projectId);
     if (idx >= 0) {
         modState.queue.splice(idx, 1);

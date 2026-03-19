@@ -61,9 +61,18 @@ async function renderModpacks() {
         ` : ''}
 
         <div id="mp-results">
-            ${emptyState('&#128230;', 'Search for modpacks', 'Type a query and click Search.')}
+            ${loading('Loading modpacks...')}
         </div>
     `;
+
+    // Preserve filter selections across re-renders.
+    const sourceEl = document.getElementById('mp-source');
+    const loaderEl = document.getElementById('mp-loader');
+    if (sourceEl) sourceEl.value = modpackState.source || 'modrinth';
+    if (loaderEl) loaderEl.value = modpackState.loader || '';
+
+    // Populate with initial results so users do not need to search first.
+    await searchModpacks();
 }
 
 async function searchModpacks() {
@@ -112,6 +121,7 @@ async function searchModpacks() {
 }
 
 function modpackCard(p) {
+    const encodedName = encodeURIComponent(p.name || '');
     return `
         <div class="mod-card">
             <img class="mod-icon" src="${p.icon_url || ''}" alt="" onerror="this.style.display='none'">
@@ -125,14 +135,15 @@ function modpackCard(p) {
                 </div>
             </div>
             <div class="mod-card-actions">
-                <button class="btn btn-primary btn-sm" onclick="showModpackInstall('${p.id}', '${escapeHtml(p.name)}', '${p.source}')">Install</button>
+                <button class="btn btn-primary btn-sm" onclick="showModpackInstall('${p.id}', '${encodedName}', '${p.source}')">Install</button>
                 ${p.source === 'modrinth' ? `<button class="btn btn-secondary btn-sm" onclick="viewModpackDetail('${p.id}')">Details</button>` : ''}
             </div>
         </div>
     `;
 }
 
-async function showModpackInstall(projectId, name, source) {
+async function showModpackInstall(projectId, encodedName, source) {
+    const name = decodeURIComponent(encodedName || '');
     const serverSelect = document.getElementById('mp-target-server');
     if (!serverSelect) {
         toast('Create a server first before installing modpacks', 'warning');
