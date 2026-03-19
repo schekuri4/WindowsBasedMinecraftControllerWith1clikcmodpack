@@ -365,7 +365,13 @@ async function createServerFromModpack(encodedName, maxRam, port, source, projec
         });
 
         if (result.success) {
-            toast(`Modpack installed! ${result.files_installed} files`, 'success');
+            const total = result.files_total || result.files_installed;
+            const skipped = result.files_skipped || 0;
+            if (skipped > 0) {
+                toast(`Modpack installed: ${result.files_installed}/${total} files (${skipped} failed — check mods)`, 'warning');
+            } else {
+                toast(`Modpack installed! ${result.files_installed} files`, 'success');
+            }
             navigate('server-detail', { id: server.server_id });
         } else {
             toast(result.error || 'Modpack installation failed', 'error');

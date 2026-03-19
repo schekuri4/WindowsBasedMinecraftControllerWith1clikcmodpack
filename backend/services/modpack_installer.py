@@ -349,14 +349,39 @@ class ModpackInstaller:
             mods_dir.mkdir(exist_ok=True)
 
             files_to_download = index.get("files", [])
-            for file_entry in files_to_download:
+            installed_count = 0
+            skipped_files = []
+
+            async def _download_one(file_entry: dict) -> bool:
                 file_dest = server_path / file_entry["path"]
                 file_dest.parent.mkdir(parents=True, exist_ok=True)
                 downloads = file_entry.get("downloads", [])
-                if downloads:
-                    file_resp = await client.get(downloads[0])
-                    file_resp.raise_for_status()
-                    file_dest.write_bytes(file_resp.content)
+                if not downloads:
+                    return False
+                for attempt in range(3):
+                    try:
+                        file_resp = await client.get(downloads[0])
+                        file_resp.raise_for_status()
+                        file_dest.write_bytes(file_resp.content)
+                        return True
+                    except Exception:
+                        if attempt < 2:
+                            await asyncio.sleep(1 * (attempt + 1))
+                return False
+
+            # Download in batches of 10 for speed
+            batch_size = 10
+            for i in range(0, len(files_to_download), batch_size):
+                batch = files_to_download[i:i + batch_size]
+                results = await asyncio.gather(
+                    *[_download_one(fe) for fe in batch],
+                    return_exceptions=True,
+                )
+                for fe, res in zip(batch, results):
+                    if res is True:
+                        installed_count += 1
+                    else:
+                        skipped_files.append(fe.get("path", "unknown"))
 
             # Copy overrides
             overrides_dir = extract_dir / "overrides"
@@ -435,7 +460,10 @@ class ModpackInstaller:
                 "modpack_name": index.get("name", ""),
                 "minecraft_version": mc_version,
                 "loader": loader,
-                "files_installed": len(files_to_download),
+                "files_installed": installed_count,
+                "files_total": len(files_to_download),
+                "files_skipped": len(skipped_files),
+                "skipped_names": skipped_files[:20],  # first 20 for diagnostics
             }
 
     @staticmethod
@@ -510,32 +538,50 @@ class ModpackInstaller:
 
             installed_count = 0
             skipped_mods = []
-            for mod_file in manifest.get("files", []):
+            total_mods = len(manifest.get("files", []))
+
+            async def _download_cf_mod(mod_file: dict) -> tuple[bool, str]:
                 cf_project_id = mod_file["projectID"]
                 cf_file_id = mod_file["fileID"]
-                try:
-                    file_resp = await client.get(
-                        f"{settings.CURSEFORGE_API_URL}/mods/{cf_project_id}/files/{cf_file_id}",
-                        headers=headers,
-                    )
-                    file_resp.raise_for_status()
-                    fdata = file_resp.json()["data"]
-                    dl_url = fdata.get("downloadUrl")
-                    # Fallback: construct edge download URL when author disabled direct downloads
-                    if not dl_url:
-                        file_id_str = str(cf_file_id)
-                        dl_url = (
-                            f"https://edge.forgecdn.net/files/"
-                            f"{file_id_str[:4]}/{file_id_str[4:]}/{fdata['fileName']}"
+                for attempt in range(3):
+                    try:
+                        file_resp = await client.get(
+                            f"{settings.CURSEFORGE_API_URL}/mods/{cf_project_id}/files/{cf_file_id}",
+                            headers=headers,
                         )
-                    mod_resp = await client.get(dl_url)
-                    mod_resp.raise_for_status()
-                    mod_path = mods_dir / fdata["fileName"]
-                    mod_path.write_bytes(mod_resp.content)
-                    installed_count += 1
-                except Exception as e:
-                    skipped_mods.append(str(cf_project_id))
-                    continue
+                        file_resp.raise_for_status()
+                        fdata = file_resp.json()["data"]
+                        dl_url = fdata.get("downloadUrl")
+                        # Fallback: construct edge download URL when author disabled direct downloads
+                        if not dl_url:
+                            file_id_str = str(cf_file_id)
+                            dl_url = (
+                                f"https://edge.forgecdn.net/files/"
+                                f"{file_id_str[:4]}/{file_id_str[4:]}/{fdata['fileName']}"
+                            )
+                        mod_resp = await client.get(dl_url)
+                        mod_resp.raise_for_status()
+                        mod_path = mods_dir / fdata["fileName"]
+                        mod_path.write_bytes(mod_resp.content)
+                        return True, fdata["fileName"]
+                    except Exception:
+                        if attempt < 2:
+                            await asyncio.sleep(1 * (attempt + 1))
+                return False, str(cf_project_id)
+
+            # Download in batches of 10 for speed
+            for i in range(0, total_mods, 10):
+                batch = manifest.get("files", [])[i:i + 10]
+                results = await asyncio.gather(
+                    *[_download_cf_mod(mf) for mf in batch],
+                    return_exceptions=True,
+                )
+                for mf, res in zip(batch, results):
+                    if isinstance(res, tuple) and res[0] is True:
+                        installed_count += 1
+                    else:
+                        name = res[1] if isinstance(res, tuple) else str(mf["projectID"])
+                        skipped_mods.append(name)
 
             # Copy overrides
             overrides_name = manifest.get("overrides", "overrides")
@@ -597,7 +643,9 @@ class ModpackInstaller:
                 "minecraft_version": mc_version,
                 "loader": loader,
                 "files_installed": installed_count,
+                "files_total": total_mods,
                 "files_skipped": len(skipped_mods),
+                "skipped_names": skipped_mods[:20],
             }
 
     # -------------------------------------------------------------------
