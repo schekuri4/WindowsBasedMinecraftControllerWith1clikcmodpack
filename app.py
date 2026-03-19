@@ -45,7 +45,11 @@ async def auth_middleware(request: Request, call_next):
         if token not in VALID_TOKENS:
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
 
-    return await call_next(request)
+    response = await call_next(request)
+    # Prevent browser caching of JS/CSS so code changes appear immediately
+    if path.startswith("/static") and any(path.endswith(ext) for ext in (".js", ".css", ".html")):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return response
 
 # Serve frontend static files
 FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
@@ -62,7 +66,7 @@ def on_startup():
 async def root():
     index = FRONTEND_DIR / "index.html"
     if index.exists():
-        return FileResponse(str(index))
+        return FileResponse(str(index), headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
     return {"message": f"{settings.APP_NAME} v{settings.APP_VERSION} — API running at /api/docs"}
 
 

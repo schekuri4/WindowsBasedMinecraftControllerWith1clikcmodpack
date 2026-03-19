@@ -366,7 +366,7 @@ class ServerManager:
         except Exception:
             proc.kill()
 
-        del ServerManager._processes[server_id]
+        ServerManager._processes.pop(server_id, None)
         ServerManager._console_buffers.pop(server_id, None)
 
         server = db.query(Server).filter(Server.id == server_id).first()
@@ -433,7 +433,7 @@ class ServerManager:
                 server.status = "stopped"
                 server.pid = None
                 db.commit()
-                del ServerManager._processes[server_id]
+                ServerManager._processes.pop(server_id, None)
 
         # Directory size
         server_path = Path(server.path)
