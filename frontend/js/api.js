@@ -5,10 +5,14 @@ const API = {
     base: '/api',
 
     async request(method, path, body = null) {
+        const token = localStorage.getItem('mcsp_token');
         const opts = {
             method,
             headers: { 'Content-Type': 'application/json' },
         };
+        if (token) {
+            opts.headers.Authorization = `Bearer ${token}`;
+        }
         if (body) opts.body = JSON.stringify(body);
         const resp = await fetch(this.base + path, opts);
         if (!resp.ok) {
@@ -22,6 +26,11 @@ const API = {
     post(path, body) { return this.request('POST', path, body); },
     put(path, body) { return this.request('PUT', path, body); },
     del(path) { return this.request('DELETE', path); },
+
+    // Auth
+    auth: {
+        login: (username, password) => API.post('/auth/login', { username, password }),
+    },
 
     // Servers
     servers: {
@@ -82,6 +91,19 @@ const API = {
         batchInstall: (serverId, mods) => API.post(`/mods/install-batch/${serverId}`, { mods }),
         uninstall: (serverId, modId) => API.del(`/mods/uninstall/${serverId}/${modId}`),
         checkUpdates: (serverId) => API.get(`/mods/updates/${serverId}`),
+    },
+
+    // Plugins
+    plugins: {
+        searchModrinth: (params) => {
+            const q = new URLSearchParams(params).toString();
+            return API.get(`/plugins/search/modrinth?${q}`);
+        },
+        versions: (id, params = {}) => {
+            const q = new URLSearchParams(params).toString();
+            return API.get(`/plugins/versions/modrinth/${id}?${q}`);
+        },
+        install: (serverId, data) => API.post(`/plugins/install/${serverId}`, data),
     },
 
     // System & Backups
