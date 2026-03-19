@@ -60,6 +60,14 @@ async def get_modpack_versions(
     return await ModpackInstaller.get_modpack_versions_modrinth(project_id, mc_version, loader)
 
 
+@router.get("/versions/curseforge/{project_id}")
+async def get_modpack_versions_curseforge(
+    project_id: str,
+    mc_version: str = "",
+):
+    return await ModpackInstaller.get_modpack_versions_curseforge(project_id, mc_version)
+
+
 @router.post("/install/{server_id}")
 async def install_modpack(
     server_id: int,

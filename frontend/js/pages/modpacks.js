@@ -7,21 +7,25 @@ let modpackState = {
     mcVersion: '',
     loader: '',
     offset: 0,
-    selectedServer: null,
+    features: { curseforge_enabled: false },
 };
 
 async function renderModpacks() {
     const main = document.getElementById('main-content');
-
-    // Load servers for the "install to" dropdown
-    let servers = [];
-    try { servers = await API.servers.list(); } catch (e) { /* ignore */ }
+    try {
+        modpackState.features = await API.system.features();
+    } catch (e) {
+        modpackState.features = { curseforge_enabled: false };
+    }
+    if (!modpackState.features.curseforge_enabled && modpackState.source === 'curseforge') {
+        modpackState.source = 'modrinth';
+    }
 
     main.innerHTML = `
         <div class="page-header">
             <div>
                 <h2>Modpack Browser</h2>
-                <div class="subtitle">Browse and install modpacks from Modrinth & CurseForge</div>
+                <div class="subtitle">Browse modpacks from Modrinth & CurseForge</div>
             </div>
         </div>
 
@@ -34,7 +38,7 @@ async function renderModpacks() {
                 <div class="form-group" style="margin:0">
                     <select class="form-select" id="mp-source" onchange="modpackState.source=this.value">
                         <option value="modrinth">Modrinth</option>
-                        <option value="curseforge">CurseForge</option>
+                        <option value="curseforge" ${modpackState.features.curseforge_enabled ? '' : 'disabled'}>CurseForge${modpackState.features.curseforge_enabled ? '' : ' (API key required)'}</option>
                     </select>
                 </div>
                 <div class="form-group" style="margin:0">
@@ -51,14 +55,10 @@ async function renderModpacks() {
             </div>
         </div>
 
-        ${servers.length > 0 ? `
-            <div class="card" style="margin-bottom:20px;padding:12px 20px;display:flex;align-items:center;gap:12px;">
-                <span style="color:var(--text-secondary);font-size:14px;">Install to server:</span>
-                <select class="form-select" id="mp-target-server" style="width:auto;min-width:200px;">
-                    ${servers.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')}
-                </select>
-            </div>
-        ` : ''}
+        <div class="card" style="margin-bottom:20px;padding:12px 20px;display:flex;justify-content:space-between;align-items:center;gap:12px;">
+            <span style="color:var(--text-secondary);font-size:14px;">Install modpacks from each server page to avoid selecting a target server twice.</span>
+            <button class="btn btn-secondary btn-sm" onclick="navigate('servers')">Open Servers</button>
+        </div>
 
         <div id="mp-results">
             ${loading('Loading modpacks...')}
@@ -80,6 +80,12 @@ async function searchModpacks() {
     modpackState.mcVersion = document.getElementById('mp-version').value;
     modpackState.loader = document.getElementById('mp-loader')?.value || '';
     modpackState.source = document.getElementById('mp-source').value;
+    if (modpackState.source === 'curseforge' && !modpackState.features.curseforge_enabled) {
+        modpackState.source = 'modrinth';
+        const sourceEl = document.getElementById('mp-source');
+        if (sourceEl) sourceEl.value = 'modrinth';
+        toast('CurseForge search is unavailable until CURSEFORGE_API_KEY is configured', 'warning');
+    }
     modpackState.offset = 0;
 
     const results = document.getElementById('mp-results');
@@ -135,72 +141,10 @@ function modpackCard(p) {
                 </div>
             </div>
             <div class="mod-card-actions">
-                <button class="btn btn-primary btn-sm" onclick="showModpackInstall('${p.id}', '${encodedName}', '${p.source}')">Install</button>
                 ${p.source === 'modrinth' ? `<button class="btn btn-secondary btn-sm" onclick="viewModpackDetail('${p.id}')">Details</button>` : ''}
             </div>
         </div>
     `;
-}
-
-async function showModpackInstall(projectId, encodedName, source) {
-    const name = decodeURIComponent(encodedName || '');
-    const serverSelect = document.getElementById('mp-target-server');
-    if (!serverSelect) {
-        toast('Create a server first before installing modpacks', 'warning');
-        return;
-    }
-    const serverId = serverSelect.value;
-
-    if (source === 'modrinth') {
-        showModal(`
-            <div class="modal-header"><h3>Install: ${escapeHtml(name)}</h3><button class="btn-icon" onclick="closeModalDirect()">&#10005;</button></div>
-            <div class="modal-body">${loading('Loading versions...')}</div>
-        `);
-        try {
-            const versions = await API.modpacks.versions(projectId);
-            const body = document.querySelector('#modal-content .modal-body');
-            if (versions.length === 0) {
-                body.innerHTML = emptyState('&#9888;', 'No versions available');
-                return;
-            }
-            body.innerHTML = `
-                <div class="form-group">
-                    <label class="form-label">Select Version</label>
-                    <select class="form-select" id="mp-install-version">
-                        ${versions.slice(0, 20).map(v => `<option value="${v.id}">${escapeHtml(v.name)} (MC ${v.game_versions.join(', ')})</option>`).join('')}
-                    </select>
-                </div>
-                <button class="btn btn-success" id="mp-install-btn" onclick="doInstallModpack(${serverId}, '${source}', '${projectId}')">
-                    &#9889; Install Modpack
-                </button>
-            `;
-        } catch (err) {
-            document.querySelector('#modal-content .modal-body').innerHTML = emptyState('&#9888;', 'Error', err.message);
-        }
-    }
-}
-
-async function doInstallModpack(serverId, source, projectId) {
-    const versionId = document.getElementById('mp-install-version').value;
-    const btn = document.getElementById('mp-install-btn');
-    btn.disabled = true;
-    btn.innerHTML = '<div class="spinner"></div> Installing...';
-
-    try {
-        const result = await API.modpacks.install(serverId, { source, project_id: projectId, version_id: versionId });
-        if (result.success) {
-            toast(`Modpack installed! ${result.files_installed} files`, 'success');
-            closeModalDirect();
-        } else {
-            toast(result.error, 'error');
-            btn.disabled = false;
-            btn.innerHTML = '&#9889; Install Modpack';
-        }
-    } catch (err) {
-        toast(err.message, 'error');
-        btn.disabled = false;
-        btn.innerHTML = '&#9889; Install Modpack';
-    }
 }
 
 async function viewModpackDetail(projectId) {

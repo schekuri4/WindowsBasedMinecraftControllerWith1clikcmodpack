@@ -175,6 +175,75 @@ class ModpackInstaller:
                 ],
             }
 
+    @staticmethod
+    async def get_modpack_versions_curseforge(project_id: str, mc_version: str = "") -> list[dict]:
+        """Get available files/versions for a CurseForge modpack."""
+        if not settings.CURSEFORGE_API_KEY:
+            return []
+
+        params = {
+            "pageSize": 50,
+            "index": 0,
+            "sortField": 1,  # File date
+            "sortOrder": "desc",
+        }
+        if mc_version:
+            params["gameVersion"] = mc_version
+
+        headers = {"x-api-key": settings.CURSEFORGE_API_KEY}
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{settings.CURSEFORGE_API_URL}/mods/{project_id}/files",
+                params=params,
+                headers=headers,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            versions = []
+            for f in data.get("data", []):
+                file_versions = f.get("sortableGameVersions", [])
+                game_versions = [
+                    v.get("gameVersionName", "")
+                    for v in file_versions
+                    if v.get("gameVersionName")
+                ]
+                game_versions = list(dict.fromkeys(game_versions))
+
+                loaders = []
+                for v in file_versions:
+                    name = (v.get("gameVersionName") or "").lower()
+                    if "forge" in name:
+                        loaders.append("forge")
+                    if "fabric" in name:
+                        loaders.append("fabric")
+                    if "quilt" in name:
+                        loaders.append("quilt")
+                    if "neoforge" in name:
+                        loaders.append("neoforge")
+                loaders = list(dict.fromkeys(loaders))
+
+                versions.append(
+                    {
+                        "id": str(f["id"]),
+                        "name": f.get("displayName", f.get("fileName", str(f["id"]))),
+                        "version_number": f.get("fileName", ""),
+                        "game_versions": game_versions,
+                        "loaders": loaders,
+                        "date_published": f.get("fileDate", ""),
+                        "files": [
+                            {
+                                "url": f.get("downloadUrl", ""),
+                                "filename": f.get("fileName", ""),
+                                "size": f.get("fileLength", 0),
+                                "primary": True,
+                            }
+                        ],
+                    }
+                )
+
+            return versions
+
     # -------------------------------------------------------------------
     # Install Modpack
     # -------------------------------------------------------------------

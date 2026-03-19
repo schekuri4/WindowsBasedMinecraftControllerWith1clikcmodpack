@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from backend.config import settings
 from backend.database import get_db
 from backend.services.backup_manager import BackupManager
 from backend.services.system_monitor import SystemMonitor
@@ -25,6 +26,13 @@ def get_system_stats():
 @router.get("/system/network")
 async def get_system_network():
     return await SystemMonitor.get_network_info()
+
+
+@router.get("/system/features")
+def get_system_features():
+    return {
+        "curseforge_enabled": bool(settings.CURSEFORGE_API_KEY),
+    }
 
 
 @router.post("/backups/{server_id}")

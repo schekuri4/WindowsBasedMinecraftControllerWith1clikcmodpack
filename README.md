@@ -68,6 +68,24 @@ python -m uvicorn app:app --host 0.0.0.0 --port 8080 --reload
 
 Then open **http://localhost:8080** in your browser.
 
+### Start With Windows (Parsec + MCServerPanel)
+
+To launch both Parsec and MCServerPanel automatically when you sign in:
+
+1. Run:
+```bat
+install_startup.bat
+```
+2. This creates a Task Scheduler entry named **MCServerPanel + Parsec Startup**.
+3. At logon, it executes `startup_launcher.bat`, which:
+    - starts `C:\Program Files\Parsec\parsecd.exe` if it is not already running
+    - starts MCServerPanel on port 8080
+
+To remove it later:
+```bat
+schtasks /Delete /TN "MCServerPanel + Parsec Startup" /F
+```
+
 ### CurseForge API Key (Optional)
 To enable CurseForge modpack/mod searching:
 1. Get a free API key from [console.curseforge.com](https://console.curseforge.com/)

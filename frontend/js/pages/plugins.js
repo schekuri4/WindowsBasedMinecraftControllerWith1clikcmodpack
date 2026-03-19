@@ -12,14 +12,11 @@ let pluginState = {
 async function renderPlugins() {
     const main = document.getElementById('main-content');
 
-    let servers = [];
-    try { servers = await API.servers.list(); } catch (e) { /* ignore */ }
-
     main.innerHTML = `
         <div class="page-header">
             <div>
                 <h2>Plugin Browser</h2>
-                <div class="subtitle">Browse and install server plugins from Modrinth, Hangar, and Spiget</div>
+                <div class="subtitle">Browse server plugins from Modrinth, Hangar, and Spiget</div>
             </div>
         </div>
 
@@ -52,14 +49,10 @@ async function renderPlugins() {
             </div>
         </div>
 
-        ${servers.length > 0 ? `
-            <div class="card" style="margin-bottom:20px;padding:12px 20px;display:flex;align-items:center;gap:12px;">
-                <span style="color:var(--text-secondary);font-size:14px;">Install to server:</span>
-                <select class="form-select" id="plugin-target-server" style="width:auto;min-width:240px;">
-                    ${servers.map(s => `<option value="${s.id}">${escapeHtml(s.name)} (${escapeHtml(s.server_type)})</option>`).join('')}
-                </select>
-            </div>
-        ` : ''}
+        <div class="card" style="margin-bottom:20px;padding:12px 20px;display:flex;justify-content:space-between;align-items:center;gap:12px;">
+            <span style="color:var(--text-secondary);font-size:14px;">Install plugins from each server page so the target server is chosen once.</span>
+            <button class="btn btn-secondary btn-sm" onclick="navigate('servers')">Open Servers</button>
+        </div>
 
         <div id="plugin-results">
             ${loading('Loading plugins...')}
@@ -118,7 +111,6 @@ async function searchPlugins() {
 }
 
 function pluginCard(p) {
-    const encodedName = encodeURIComponent(p.name || '');
     return `
         <div class="mod-card">
             <img class="mod-icon" src="${p.icon_url || ''}" alt="" onerror="this.style.display='none'">
@@ -131,79 +123,6 @@ function pluginCard(p) {
                     ${(p.categories || []).slice(0, 3).map(c => `<span class="tag">${escapeHtml(c)}</span>`).join('')}
                 </div>
             </div>
-            <div class="mod-card-actions">
-                <button class="btn btn-primary btn-sm" onclick="showPluginInstall('${p.id}', '${encodedName}', '${p.source}')">Install</button>
-            </div>
         </div>
     `;
-}
-
-async function showPluginInstall(projectId, encodedName, source) {
-    const name = decodeURIComponent(encodedName || '');
-    const serverSelect = document.getElementById('plugin-target-server');
-    if (!serverSelect) {
-        toast('Create a server first', 'warning');
-        return;
-    }
-    const serverId = serverSelect.value;
-
-    showModal(`
-        <div class="modal-header"><h3>Install Plugin: ${escapeHtml(name)}</h3><button class="btn-icon" onclick="closeModalDirect()">&#10005;</button></div>
-        <div class="modal-body">${loading('Loading versions...')}</div>
-    `);
-
-    try {
-        const versions = await API.plugins.versions(projectId, {
-            source,
-            mc_version: document.getElementById('plugin-version')?.value || '',
-            loader: document.getElementById('plugin-loader')?.value || '',
-        });
-
-        const body = document.querySelector('#modal-content .modal-body');
-        if (versions.length === 0) {
-            body.innerHTML = emptyState('&#9888;', 'No compatible versions found');
-            return;
-        }
-
-        body.innerHTML = `
-            <div class="form-group">
-                <label class="form-label">Select Version</label>
-                <select class="form-select" id="plugin-install-version">
-                    ${versions.slice(0, 30).map(v => `<option value="${v.id}">${escapeHtml(v.name)} (MC ${v.game_versions.slice(0, 3).join(', ')})</option>`).join('')}
-                </select>
-            </div>
-            <button class="btn btn-success" id="plugin-install-btn" onclick="doInstallPlugin(${serverId}, '${projectId}', '${source}')">
-                &#9889; Install Plugin
-            </button>
-        `;
-    } catch (err) {
-        document.querySelector('#modal-content .modal-body').innerHTML = emptyState('&#9888;', 'Error', err.message);
-    }
-}
-
-async function doInstallPlugin(serverId, projectId, source) {
-    const versionId = document.getElementById('plugin-install-version').value;
-    const btn = document.getElementById('plugin-install-btn');
-    btn.disabled = true;
-    btn.innerHTML = '<div class="spinner"></div> Installing...';
-
-    try {
-        const result = await API.plugins.install(serverId, {
-            source,
-            project_id: projectId,
-            version_id: versionId,
-        });
-        if (result.success) {
-            toast(`Installed ${result.plugin_name}`, 'success');
-            closeModalDirect();
-        } else {
-            toast(result.error, 'error');
-            btn.disabled = false;
-            btn.innerHTML = '&#9889; Install Plugin';
-        }
-    } catch (err) {
-        toast(err.message, 'error');
-        btn.disabled = false;
-        btn.innerHTML = '&#9889; Install Plugin';
-    }
 }

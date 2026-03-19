@@ -3,6 +3,7 @@
  */
 let createServerState = {
     network: null,
+    features: { curseforge_enabled: false },
 };
 
 async function renderCreateServer() {
@@ -11,6 +12,11 @@ async function renderCreateServer() {
         createServerState.network = await API.system.network();
     } catch (e) {
         createServerState.network = null;
+    }
+    try {
+        createServerState.features = await API.system.features();
+    } catch (e) {
+        createServerState.features = { curseforge_enabled: false };
     }
     main.innerHTML = `
         <div class="page-header">
@@ -158,6 +164,13 @@ function renderModpackServerForm() {
         </div>
         <div class="form-row">
             <div class="form-group">
+                <label class="form-label">Source</label>
+                <select class="form-select" id="csm-source">
+                    <option value="modrinth" selected>Modrinth</option>
+                    <option value="curseforge" ${createServerState.features.curseforge_enabled ? '' : 'disabled'}>CurseForge${createServerState.features.curseforge_enabled ? '' : ' (API key required)'}</option>
+                </select>
+            </div>
+            <div class="form-group">
                 <label class="form-label">Search Modpacks</label>
                 <input class="form-input" id="csm-search" placeholder="Search modpacks..." onkeydown="if(event.key==='Enter')searchModpacksForCreate()">
             </div>
@@ -217,11 +230,26 @@ async function doCreateServer() {
 
 async function searchModpacksForCreate() {
     const query = document.getElementById('csm-search').value;
+    const source = document.getElementById('csm-source')?.value || 'modrinth';
+    if (source === 'curseforge' && !createServerState.features.curseforge_enabled) {
+        const sourceEl = document.getElementById('csm-source');
+        if (sourceEl) sourceEl.value = 'modrinth';
+        toast('CurseForge search is unavailable until CURSEFORGE_API_KEY is configured', 'warning');
+        return;
+    }
     const results = document.getElementById('csm-results');
     results.innerHTML = loading('Searching...');
 
     try {
-        const data = await API.modpacks.searchModrinth({ query, limit: 10 });
+        const data = source === 'curseforge'
+            ? await API.modpacks.searchCurseforge({ query, limit: 20 })
+            : await API.modpacks.searchModrinth({ query, limit: 20 });
+
+        if (data.error) {
+            results.innerHTML = emptyState('&#9888;', 'Search failed', data.error);
+            return;
+        }
+
         if (data.results.length === 0) {
             results.innerHTML = emptyState('&#128270;', 'No modpacks found');
             return;
@@ -240,7 +268,7 @@ async function searchModpacksForCreate() {
                             </div>
                         </div>
                         <div class="mod-card-actions">
-                            <button class="btn btn-primary btn-sm" onclick="selectModpackForCreate('${p.id}', '${encodeURIComponent(p.name || '')}')">Select</button>
+                            <button class="btn btn-primary btn-sm" onclick="selectModpackForCreate('${p.id}', '${encodeURIComponent(p.name || '')}', '${source}')">Select</button>
                         </div>
                     </div>
                 `).join('')}
@@ -251,7 +279,7 @@ async function searchModpacksForCreate() {
     }
 }
 
-async function selectModpackForCreate(projectId, encodedName) {
+async function selectModpackForCreate(projectId, encodedName, source = 'modrinth') {
     const name = decodeURIComponent(encodedName || '');
     const serverName = document.getElementById('csm-name').value || name + ' Server';
     const maxRam = document.getElementById('csm-maxram').value;
@@ -260,20 +288,25 @@ async function selectModpackForCreate(projectId, encodedName) {
     results.innerHTML = loading('Fetching modpack versions...');
 
     try {
-        const versions = await API.modpacks.versions(projectId);
+        const versions = source === 'curseforge'
+            ? await API.modpacks.versionsCurseforge(projectId)
+            : await API.modpacks.versions(projectId);
+
         if (versions.length === 0) {
             results.innerHTML = emptyState('&#9888;', 'No server versions found for this modpack');
             return;
         }
 
         const v = versions[0]; // Latest version
+        const gameVersions = Array.isArray(v.game_versions) ? v.game_versions.filter(Boolean) : [];
+        const loaders = Array.isArray(v.loaders) ? v.loaders.filter(Boolean) : [];
         results.innerHTML = `
             <div class="card" style="background:var(--bg-input)">
                 <h4>Selected: ${escapeHtml(name)} - ${escapeHtml(v.name)}</h4>
                 <p style="color:var(--text-secondary);font-size:13px;margin:8px 0;">
-                    MC: ${v.game_versions.join(', ')} &middot; Loaders: ${v.loaders.join(', ')} &middot; Port: ${port}
+                    Source: ${escapeHtml(source)} &middot; MC: ${escapeHtml(gameVersions.join(', ') || 'Unknown')} &middot; Loaders: ${escapeHtml(loaders.join(', ') || 'Unknown')} &middot; Port: ${port}
                 </p>
-                <button class="btn btn-success" id="csm-install-btn" onclick="createServerFromModpack('${encodeURIComponent(serverName)}', '${maxRam}', ${port}, '${projectId}', '${v.id}')">
+                <button class="btn btn-success" id="csm-install-btn" onclick="createServerFromModpack('${encodeURIComponent(serverName)}', '${maxRam}', ${port}, '${source}', '${projectId}', '${v.id}')">
                     &#9889; Create Server with this Modpack
                 </button>
             </div>
@@ -283,7 +316,7 @@ async function selectModpackForCreate(projectId, encodedName) {
     }
 }
 
-async function createServerFromModpack(encodedName, maxRam, port, projectId, versionId) {
+async function createServerFromModpack(encodedName, maxRam, port, source, projectId, versionId) {
     const name = decodeURIComponent(encodedName || '');
     const btn = document.getElementById('csm-install-btn');
     btn.disabled = true;
@@ -302,7 +335,7 @@ async function createServerFromModpack(encodedName, maxRam, port, projectId, ver
 
         // Install modpack onto it
         const result = await API.modpacks.install(server.server_id, {
-            source: 'modrinth',
+            source,
             project_id: projectId,
             version_id: versionId,
         });

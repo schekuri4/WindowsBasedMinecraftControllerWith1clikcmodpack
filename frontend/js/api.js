@@ -64,6 +64,10 @@ const API = {
             const q = new URLSearchParams(params).toString();
             return API.get(`/modpacks/versions/modrinth/${id}?${q}`);
         },
+        versionsCurseforge: (id, params = {}) => {
+            const q = new URLSearchParams(params).toString();
+            return API.get(`/modpacks/versions/curseforge/${id}?${q}`);
+        },
         install: (serverId, data) => API.post(`/modpacks/install/${serverId}`, data),
         checkUpdate: (serverId) => API.get(`/modpacks/update-check/${serverId}`),
         export: (serverId, name) => API.post(`/modpacks/export/${serverId}`, { name }),
@@ -121,6 +125,7 @@ const API = {
     system: {
         stats: () => API.get('/system/stats'),
         network: () => API.get('/system/network'),
+        features: () => API.get('/system/features'),
     },
 
     backups: {
